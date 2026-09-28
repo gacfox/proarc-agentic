@@ -1,6 +1,20 @@
 # ReAct 智能体
 
-ReAct（Reasoning + Acting）是目前构建智能体的经典范式：模型在循环中不断「思考—调用工具—观察结果」，直到能够给出最终答案。`ReActAgentExecutor` 就是这个范式的实现，它把循环编排、工具调度、消息历史维护都封装起来，我们只需要提供客户端、工具和初始消息。
+ReAct（Reasoning + Acting）是目前构建智能体的经典范式：模型在循环中不断「思考—调用工具—观察结果」，直到能够给出最终答案。`ReActAgentExecutor` 就是这个范式的实现，它把循环编排、工具调度、消息历史维护都封装起来，我们只需要提供客户端、工具和初始消息。单轮循环的执行流程如下。
+
+```mermaid
+flowchart TD
+    A["携带消息历史与工具列表调用 LLM"] --> B{"模型返回<br>tool_calls？"}
+    B -- "否" --> C["修复残留 tool_calls<br>追加提示消息"] --> A
+    B -- "是" --> D{"逐个处理工具调用"}
+    D --> E{"是否 final_answer？"}
+    E -- "是" --> F["提取最终答案<br>发出 FINAL_ANSWER 事件"]
+    F --> G["结束循环"]
+    E -- "否" --> H["执行工具<br>发出 TOOL_CALL / TOOL_RESULT 事件"]
+    H --> I["结果追加到消息历史"]
+    I --> D
+    D -- "本轮调用处理完毕且未结束" --> A
+```
 
 ## 基本用法
 
@@ -22,12 +36,12 @@ Flux<AgentResponse> events = agent.execute(AgentContext.builder()
 
 执行器的几个构建参数：
 
-- `defaultLlmClient`：默认的 LLM 客户端，`AgentContext` 中未指定客户端时使用；
-- `toolRegistry`：工具注册中心，注入 Starter 自动装配的 Bean 即可；
-- `defaultToolNames`：默认启用的工具名列表，`AgentContext` 中未指定工具时使用；
-- `maxIterations`：最大循环轮数，默认 50，超限后以 `ERROR` 事件结束，防止模型陷入死循环。
+- `defaultLlmClient`：默认的 LLM 客户端，`AgentContext` 中未指定客户端时使用
+- `toolRegistry`：工具注册中心，注入 Starter 自动装配的 Bean 即可
+- `defaultToolNames`：默认启用的工具名列表，`AgentContext` 中未指定工具时使用
+- `maxIterations`：最大循环轮数，默认 50，超限后以 `ERROR` 事件结束，防止模型陷入死循环
 
-`execute` 返回 `Flux<AgentResponse>` 事件流。执行过程在 `boundedElastic` 调度器上异步进行，事件流是冷流，订阅后才开始执行。
+`execute` 返回 `Flux<AgentResponse>` 事件流。执行过程在 `boundedElastic` 调度器上异步进行。
 
 ## 执行上下文 AgentContext
 

@@ -1,23 +1,24 @@
 # 异常体系
 
-LLM 调用的失败原因五花八门：网络不通、超时、认证失败、参数错误、限流、服务端故障……框架将所有这些异常统一映射到 `LlmException` 体系，让我们可以用一致的方式处理失败，也为自动重试提供了判断依据。
+LLM 调用的失败原因五花八门：网络不通、超时、认证失败、参数错误、限流、服务端故障等。框架将所有这些异常统一映射到 `LlmException` 体系，让我们可以用一致的方式处理失败，也为自动重试提供了判断依据。
 
 ## 异常层次结构
 
-```
-LlmException（抽象基类）
-├── LlmClientException（本地/网络层，未收到 Provider 正常响应）
-│   ├── LlmTimeoutException        超时
-│   └── LlmNetworkException        网络错误（DNS 失败、连接拒绝、SSL 握手失败等）
-├── LlmProviderException（Provider 返回了错误响应）
-│   ├── LlmAuthException           认证/权限失败（401/403）
-│   ├── LlmBadRequestException     请求参数错误（400）
-│   ├── LlmNotFoundException       资源不存在（404）
-│   ├── LlmRateLimitException      Provider 限流（429）
-│   └── LlmServerException         Provider 服务端错误（5xx）
-├── LlmLocalRateLimitException     本机 QPS 限流（拦截器抛出）
-├── LlmConcurrencyLimitException   本机并发超限（拦截器抛出）
-└── LlmRetryExhaustedException     重试耗尽
+```mermaid
+flowchart TD
+    E["LlmException（抽象基类）"]
+    E --> C["LlmClientException<br>本地/网络层，未收到 Provider 正常响应"]
+    C --> C1["LlmTimeoutException<br>超时"]
+    C --> C2["LlmNetworkException<br>网络错误（DNS 失败、连接拒绝、SSL 握手失败等）"]
+    E --> P["LlmProviderException<br>Provider 返回了错误响应"]
+    P --> P1["LlmAuthException<br>认证/权限失败（401/403）"]
+    P --> P2["LlmBadRequestException<br>请求参数错误（400）"]
+    P --> P3["LlmNotFoundException<br>资源不存在（404）"]
+    P --> P4["LlmRateLimitException<br>Provider 限流（429）"]
+    P --> P5["LlmServerException<br>Provider 服务端错误（5xx）"]
+    E --> L1["LlmLocalRateLimitException<br>本机 QPS 限流（拦截器抛出）"]
+    E --> L2["LlmConcurrencyLimitException<br>本机并发超限（拦截器抛出）"]
+    E --> L3["LlmRetryExhaustedException<br>重试耗尽"]
 ```
 
 基类 `LlmException` 上带有四个通用字段。

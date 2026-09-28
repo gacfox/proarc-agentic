@@ -1,16 +1,16 @@
 # 快速开始
 
-本篇笔记带我们在一个 Spring Boot 工程中从零跑通 ProArc Agentic：先完成一次简单的 LLM 对话，再运行一个带工具调用的 ReAct 智能体。
+本篇笔记带我们在一个 Spring Boot 3.x 工程中使用 ProArc Agentic 快速实现简单的 LLM 对话和带工具调用的 ReAct 智能体。
 
 ## 环境要求
 
 - JDK 21+
 - Spring Boot 3.x
-- 一个 OpenAI 兼容端点（OpenAI 官方、DashScope 兼容模式、vLLM 自部署等均可）及其 API Key
+- 一个 OpenAI 兼容端点（OpenAI 官方、DeepSeek 兼容端点、llama.cpp 本地部署等均可）及其 API Key
 
 ## 安装与引入
 
-框架暂未发布到 Maven 中央仓库，需要先克隆源码仓库并在本地安装。
+框架目前需要本地下载并安装，先克隆源码仓库并使用`mvn install`。
 
 ```bash
 git clone https://github.com/gacfox/proarc-agentic.git
@@ -18,7 +18,7 @@ cd proarc-agentic
 mvn install
 ```
 
-安装完成后，在使用方工程的 `pom.xml` 中引入依赖。
+安装完成后，在业务工程的 `pom.xml` 中引入依赖。
 
 ```xml
 <dependency>
@@ -28,7 +28,7 @@ mvn install
 </dependency>
 ```
 
-引入依赖后，Starter 会自动装配两个 Bean：名为 `llmHttpClient` 的 reactor-netty 连接池，以及全局工具注册中心 `ToolRegistry`。前者供我们构建客户端时复用，后者会自动扫描并注册所有标注了 `@AgenticTool` 的工具方法。
+引入依赖后，Starter 会自动装配两个 Bean，名为 `llmHttpClient` 的 reactor-netty 连接池，以及全局工具注册中心 `ToolRegistry`。前者供我们构建客户端时复用，后者会自动扫描并注册所有标注了 `@AgenticTool` 的工具方法。
 
 ## 第一次对话
 
@@ -46,8 +46,8 @@ import java.util.List;
 
 ModelInfo modelInfo = ModelInfo.builder()
         .provider("openai")
-        .model("qwen-plus")
-        .endpoint("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
+        .model("deepseek-v4-flash")
+        .endpoint("http://localhost:11434/v1/chat/completions")
         .sk(System.getenv("LLM_API_KEY"))
         .capabilities(List.of(ModelInfo.CAPABILITY_REASONING, ModelInfo.CAPABILITY_TOOL))
         .build();
@@ -65,6 +65,8 @@ System.out.println(response.extractBlockingContent());
 ```
 
 `ModelInfo` 中的 `capabilities` 用于声明模型的额外能力，这里声明了 `reasoning`（支持思考）和 `tool`（支持工具调用）。这个声明会影响框架的行为，例如只有声明了 `reasoning` 的模型，请求中的 `enableThinking` 开关才会被真正传递给端点。
+
+注意：实际开发中，`model`、`endpoint`、`sk`等配置不应硬编码到Java代码中，而是应该抽离到SpringBoot配置文件、配置中心或数据库。
 
 ## 第一个智能体
 

@@ -1,6 +1,6 @@
 # ProArc Agentic
 
-ProArc Agentic 是一个基于 Spring Boot 的大语言模型（LLM）智能体开发框架，来源于一系列企业级项目的实践沉淀。它以 Spring Boot Starter 的形式提供，引入依赖后即可在工程中快速构建 LLM 对话、工具调用与 ReAct 智能体应用。
+ProArc Agentic 是一个基于 Spring Boot 的大语言模型（LLM）智能体开发框架。框架以 Spring Boot Starter 的形式提供，引入依赖后即可在工程中快速构建 LLM 多轮对话、工具调用与 ReAct 智能体应用。
 
 框架主要包含以下能力：
 

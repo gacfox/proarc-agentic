@@ -41,11 +41,11 @@ proarc:
 
 默认值是面向一般企业级应用给出的。实际项目中，有几个参数值得根据场景调整。
 
-**超时时间与流式调用的关系。** LLM 生成长文本时耗时较长，`response-timeout` 和 `read-timeout` 的默认值 180s 就是为流式场景考虑的。Netty 的读超时按两次数据到达的间隔计算而不是整体耗时，因此流式响应持续有数据到达时不会轻易触发；但如果模型长时间不出字（例如 reasoning 模型长时间思考），间隔超过 180s 就会触发超时并映射为可重试的 `LlmTimeoutException`。接入这类模型时可以适当调大。
+**超时时间与流式调用的关系：** LLM 生成长文本时耗时较长，`response-timeout` 和 `read-timeout` 的默认值 180s 就是为流式场景考虑的。Netty 的读超时按两次数据到达的间隔计算而不是整体耗时，因此流式响应持续有数据到达时不会轻易触发；但如果模型长时间不出字（例如 reasoning 模型长时间思考），间隔超过 180s 就会触发超时并映射为可重试的 `LlmTimeoutException`。接入这类模型时可以适当调大
 
-**连接数与并发限流的配合。** 如果客户端挂了 `LocalConcurrencyLimitInterceptor`，`max-connections` 设置得比并发上限大一些即可，没有放大连接数的必要；反过来，如果没有限流拦截器，`max-connections` 和 `pending-acquire-timeout` 就是保护本机的最后防线，连接耗尽时获取连接会等待直至超时。
+**连接数与并发限流的配合：** 如果客户端挂了 `LocalConcurrencyLimitInterceptor`，`max-connections` 设置得比并发上限大一些即可，没有放大连接数的必要；反过来，如果没有限流拦截器，`max-connections` 和 `pending-acquire-timeout` 就是保护本机的最后防线，连接耗尽时获取连接会等待直至超时
 
-**空闲与存活时间。** `max-idle-time` 建议小于服务端和中间链路（LB、NAT）的空闲连接回收时间，避免拿到已被对端关闭的连接；`max-life-time` 定期轮换连接，有助于 DNS 变更和负载均衡生效。
+**空闲与存活时间：** `max-idle-time` 建议小于服务端和中间链路（LB、NAT）的空闲连接回收时间，避免拿到已被对端关闭的连接；`max-life-time` 定期轮换连接，有助于 DNS 变更和负载均衡生效
 
 ## 替换默认实现
 

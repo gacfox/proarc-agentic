@@ -10,22 +10,22 @@ public interface LlmClient {
 }
 ```
 
-框架目前内置了唯一一个实现 `OpenAiLlmClient`，面向所有兼容 OpenAI Chat Completions 规范的端点。由于这类端点已经成为事实标准，OpenAI 官方、DashScope 兼容模式、vLLM 自部署服务等都可以直接接入。
+框架目前仅内置了一个泛用性最强的实现 `OpenAiLlmClient`，面向所有兼容 OpenAI Chat Completions 规范的端点。由于这类端点已经成为事实标准，大部分第三方Provider也都提供兼容服务可以直接接入。
 
 ## 模型配置 ModelInfo
 
 构建客户端之前，我们需要先通过 `ModelInfo` 描述模型的接入信息。
 
-| 字段 | 说明 |
-|---|---|
-| `provider` | 提供商标识，当前固定使用 `openai` 表示 OpenAI 兼容 API |
-| `model` | 模型名，如 `qwen-plus`、`gpt-4o` |
+| 字段 | 说明                                                        |
+|---|-----------------------------------------------------------|
+| `provider` | 提供商标识，当前固定使用 `openai` 表示 OpenAI 兼容 API 端点                 |
+| `model` | 模型名，如 `gpt-4o`、`deepseek-v4-flash`                        |
 | `endpoint` | 完整的 Chat Completions 端点地址，注意要包含 `/v1/chat/completions` 部分 |
-| `sk` | API 密钥，会以 `Authorization: Bearer <sk>` 的形式附加到请求头 |
-| `contextLength` | 模型上下文长度，仅供参考，框架不做强制校验 |
-| `maxTokens` | 模型最大输出 tokens 数，仅供参考 |
-| `capabilities` | 模型能力列表，可选值见下文 |
-| `headers` | 自定义静态请求头，会覆盖同名默认请求头 |
+| `sk` | API 密钥，会以 `Authorization: Bearer <sk>` 的形式附加到请求头          |
+| `contextLength` | 模型上下文长度，仅供参考，框架不做强制校验                                     |
+| `maxTokens` | 模型最大输出 tokens 数，仅供参考                                      |
+| `capabilities` | 模型能力列表，可选值见下文                                             |
+| `headers` | 自定义静态请求头，会覆盖同名默认请求头                                       |
 
 `capabilities` 声明模型的额外能力，目前支持三个枚举值：
 

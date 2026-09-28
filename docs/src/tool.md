@@ -42,10 +42,10 @@ public class OrderTools {
 
 工具方法的签名遵循以下约定：
 
-- 最多声明一个参数 DTO，且该参数必须标注 `@AgenticToolParam`；
-- 可以额外声明一个 `AgentContext` 类型的参数（位置任意），框架会注入当前的智能体上下文快照，工具可以通过它读写共享变量，详见「ReAct 智能体」一章；
-- 返回值的 `toString()` 结果作为工具执行结果返回给模型，一般返回 String 或可 JSON 序列化的对象；
-- 无参数的工具方法可以不声明 DTO 参数，框架会生成空的参数 schema。
+- 最多声明一个参数 DTO，且该参数必须标注 `@AgenticToolParam`
+- 可以额外声明一个 `AgentContext` 类型的参数（位置任意），框架会注入当前的智能体上下文快照，工具可以通过它读写共享变量，详见「ReAct 智能体」一章
+- 返回值的 `toString()` 结果作为工具执行结果返回给模型，一般返回 String 或可 JSON 序列化的对象
+- 无参数的工具方法可以不声明 DTO 参数，框架会生成空的参数 schema
 
 下面是几个合法的方法签名。
 
@@ -66,7 +66,45 @@ Starter 自动装配了 `ToolRegistry` 和一个 `BeanPostProcessor`：每个 Sp
 
 注册过程中，框架会做两件事：一是校验方法签名的合法性，签名不满足上述规则时会在应用启动阶段直接抛出异常，问题尽早暴露；二是通过反射生成工具的 JSON Schema。
 
-工具名全局唯一，重复注册同名工具会抛出 `IllegalStateException`。如需手动管理工具，`ToolRegistry` 也提供了 `register(ToolDefinition)`、`unregister(String)`、`getAllTools()`、`getAgenticTool(String)` 等方法，手工注册一个 `ToolDefinition` 时可以自定义 `ToolInvoker` 执行逻辑，这为对接非 Java 实现的工具（如远程 MCP 服务）留了口子。
+注册中心基于 `ConcurrentHashMap` 实现，注册与注销都是线程安全的。工具名全局唯一，重复注册同名工具会抛出 `IllegalStateException`。如需手动管理工具，`ToolRegistry` 提供了 `register(ToolDefinition)`、`unregister(String)`、`getAllTools()`、`getAgenticTool(String)` 等方法，具体用法见下一节。
+
+## 动态注册工具
+
+注解方式适合编译期就能确定的工具，而有些场景下工具只有到运行时才能确定：比如从 MCP 等服务同步工具列表、按租户动态开通工具、由配置驱动启停工具。这时我们可以通过编程方式手工构造 `ToolDefinition` 注册到 `ToolRegistry`。
+
+`ToolDefinition` 由四部分组成：工具名、工具描述、JSON Schema 字符串和 `ToolInvoker` 执行体。其中 `ToolInvoker` 是函数式接口，直接写 lambda 即可，入参是模型生成的参数 JSON 字符串和当前上下文快照，返回值的字符串就是工具执行结果。
+
+```java
+ToolDefinition toolDef = new ToolDefinition(
+        "query_stock",
+        "查询股票实时价格",
+        jsonSchema,
+        (arguments, ctx) -> {
+            JsonNode args = objectMapper.readTree(arguments);
+            return stockService.getPrice(args.get("code").asText());
+        });
+toolRegistry.register(toolDef);
+```
+
+JSON Schema 有两种来源。一种是直接手写 JSON 字符串，适合对接外部服务时对方已经提供了 schema 的情况。
+
+```java
+String jsonSchema = """
+        {"type":"function","function":{"name":"query_stock","description":"查询股票实时价格",
+        "parameters":{"type":"object","properties":{"code":{"type":"string","description":"股票代码"}},
+        "required":["code"]}}}
+        """;
+```
+
+另一种是复用框架的 `AgenticSchemaBuilder`，用一个 DTO 类生成 schema 后序列化，这样与注解方式共用同一套类型映射规则，也避免了手写 JSON。
+
+```java
+Tool tool = new AgenticSchemaBuilder()
+        .buildTool("query_stock", "查询股票实时价格", StockQuery.class);
+String jsonSchema = objectMapper.writeValueAsString(tool);
+```
+
+动态注册的工具与注解注册的工具地位完全相同：注册后在 `AgentContext.toolNames` 或执行器的 `defaultToolNames` 中按名引用，智能体就能正常调用它。需要下线时调用 `unregister(toolName)` 即可，整个注册与注销过程在运行期随时可以进行，不需要重启应用。
 
 ## Schema 生成规则
 
@@ -83,11 +121,11 @@ JSON Schema 由 `AgenticSchemaBuilder` 根据参数 DTO 的字段类型反射生
 
 有几个限制需要注意：
 
-- `Map` 类型不支持，因为 Map 的键值结构无法静态描述；
-- 集合必须声明具体的泛型元素类型，不支持通配符（`? extends` 上界形式除外）；
-- DTO 中的每个非 static、非 transient 字段都必须标注 `@AgenticToolParam`，否则启动时报错——这个约束是有意为之，保证暴露给模型的每个参数都有明确的名称和描述；
-- `static`、`transient` 和合成字段会被自动跳过。
+- `Map` 类型不支持，因为 Map 的键值结构无法静态描述
+- 集合必须声明具体的泛型元素类型，不支持通配符（`? extends` 上界形式除外）
+- DTO 中的每个非 static、非 transient 字段都必须标注 `@AgenticToolParam`，否则启动时报错，这个约束是有意为之，保证暴露给模型的每个参数都有明确的名称和描述
+- `static`、`transient` 和合成字段会被自动跳过
 
 ## 工具的执行
 
-模型发起工具调用时，`ReActAgentExecutor` 会从注册中心找到对应的 `ToolDefinition`，将模型生成的 JSON 参数反序列化为 DTO 对象，再通过反射调用工具方法。工具抛出的任何异常都会被捕获并转换为 `"Error: <异常信息>"` 形式的工具结果返回给模型，而不是中断智能体循环——模型看到这个结果后通常会修正参数重新调用，这正是我们期望的自愈行为。
+模型发起工具调用时，`ReActAgentExecutor` 会从注册中心找到对应的 `ToolDefinition`，将模型生成的 JSON 参数反序列化为 DTO 对象，再通过反射调用工具方法。工具抛出的任何异常都会被捕获并转换为 `"Error: <异常信息>"` 形式的工具结果返回给模型，而不是中断智能体循环，模型看到这个结果后通常会修正参数重新调用，这正是我们期望的自愈行为。
