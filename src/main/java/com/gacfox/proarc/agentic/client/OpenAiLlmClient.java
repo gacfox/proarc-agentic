@@ -2,6 +2,7 @@ package com.gacfox.proarc.agentic.client;
 
 import com.gacfox.proarc.agentic.client.header.LlmHeaderProvider;
 import com.gacfox.proarc.agentic.client.interceptor.LlmInterceptor;
+import com.gacfox.proarc.agentic.exception.LlmEmptyResponseException;
 import com.gacfox.proarc.agentic.exception.LlmException;
 import com.gacfox.proarc.agentic.model.openai.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -39,6 +40,9 @@ public final class OpenAiLlmClient extends AbstractLlmClient {
                     .collectList()
                     .filter(chunks -> !chunks.isEmpty())
                     .map(ModelResponse::mergeStreamChunks)
+                    .switchIfEmpty(Mono.error(() -> new LlmEmptyResponseException(
+                            "LLM returned an empty response stream",
+                            modelInfo.getProvider(), modelInfo.getModel())))
                     .block();
         } catch (Exception e) {
             throw mapException(e);

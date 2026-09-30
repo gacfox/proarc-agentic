@@ -10,6 +10,7 @@ flowchart TD
     E --> C["LlmClientException<br>本地/网络层，未收到 Provider 正常响应"]
     C --> C1["LlmTimeoutException<br>超时"]
     C --> C2["LlmNetworkException<br>网络错误（DNS 失败、连接拒绝、SSL 握手失败等）"]
+    C --> C3["LlmEmptyResponseException<br>Provider 返回 200 但响应流为空"]
     E --> P["LlmProviderException<br>Provider 返回了错误响应"]
     P --> P1["LlmAuthException<br>认证/权限失败（401/403）"]
     P --> P2["LlmBadRequestException<br>请求参数错误（400）"]
@@ -45,7 +46,7 @@ flowchart TD
 | 5xx | `LlmServerException` | `PROVIDER_SERVER` | 是 |
 | 其它 | `LlmProviderException` | `PROVIDER_ERROR` | 否 |
 
-超时（连接超时、响应超时、读写超时）映射为 `LlmTimeoutException`，网络层错误（DNS 解析失败、连接拒绝、SSL 握手失败等）映射为 `LlmNetworkException`，这两者都属于 `LlmClientException` 且可重试。
+超时（连接超时、响应超时、读写超时）映射为 `LlmTimeoutException`，网络层错误（DNS 解析失败、连接拒绝、SSL 握手失败等）映射为 `LlmNetworkException`，这两者都属于 `LlmClientException` 且可重试。另外，如果 Provider 返回了 HTTP 200 但响应流中没有任何有效内容（例如只收到 `[DONE]` 或空 body，常见于内容审核拦截或网关异常），阻塞调用会抛出同样可重试的 `LlmEmptyResponseException`，而不是返回 `null`。
 
 映射过程中，框架会尝试从响应体解析 Provider 返回的错误信息（`error.message` 和 `error.code`）拼接到异常消息中，便于排查问题；响应信息过长时会被截断到 500 字符。
 
@@ -57,6 +58,7 @@ flowchart TD
 |---|---|
 | `TIMEOUT` | 超时 |
 | `NETWORK_ERROR` | 网络错误 |
+| `EMPTY_RESPONSE` | Provider 返回 200 但响应流为空 |
 | `PROVIDER_AUTH` | Provider 认证/权限失败 |
 | `PROVIDER_BAD_REQUEST` | Provider 判定请求参数错误 |
 | `PROVIDER_NOT_FOUND` | Provider 资源不存在 |

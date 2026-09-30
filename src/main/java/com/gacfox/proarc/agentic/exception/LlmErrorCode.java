@@ -6,6 +6,7 @@ package com.gacfox.proarc.agentic.exception;
 public enum LlmErrorCode {
     TIMEOUT,
     NETWORK_ERROR,
+    EMPTY_RESPONSE,
 
     PROVIDER_AUTH,
     PROVIDER_BAD_REQUEST,

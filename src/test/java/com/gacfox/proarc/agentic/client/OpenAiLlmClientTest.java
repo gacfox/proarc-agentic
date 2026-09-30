@@ -2,6 +2,7 @@ package com.gacfox.proarc.agentic.client;
 
 import com.gacfox.proarc.agentic.exception.LlmAuthException;
 import com.gacfox.proarc.agentic.exception.LlmBadRequestException;
+import com.gacfox.proarc.agentic.exception.LlmEmptyResponseException;
 import com.gacfox.proarc.agentic.exception.LlmRateLimitException;
 import com.gacfox.proarc.agentic.exception.LlmServerException;
 import com.gacfox.proarc.agentic.model.ChatRequest;
@@ -183,6 +184,34 @@ class OpenAiLlmClientTest {
 
         assertThatThrownBy(() -> client.blockingChat(chatRequest()))
                 .isInstanceOfSatisfying(LlmBadRequestException.class, e -> assertThat(e.isRetryable()).isFalse());
+    }
+
+    @Test
+    void emptyStreamWithOnlyDoneThrowsEmptyResponse() {
+        server.enqueue(sseResponse("data: [DONE]\n\n"));
+
+        assertThatThrownBy(() -> client.blockingChat(chatRequest()))
+                .isInstanceOfSatisfying(LlmEmptyResponseException.class, e -> {
+                    assertThat(e.isRetryable()).isTrue();
+                    assertThat(e.getProvider()).isEqualTo("openai");
+                    assertThat(e.getModel()).isEqualTo("test-model");
+                });
+    }
+
+    @Test
+    void completelyEmptyBodyThrowsEmptyResponse() {
+        server.enqueue(sseResponse(""));
+
+        assertThatThrownBy(() -> client.blockingChat(chatRequest()))
+                .isInstanceOf(LlmEmptyResponseException.class);
+    }
+
+    @Test
+    void blockingChatNeverReturnsNull() {
+        server.enqueue(sseResponse("data: [DONE]\n\n"));
+
+        assertThatThrownBy(() -> client.blockingChat(chatRequest()))
+                .isNotInstanceOf(NullPointerException.class);
     }
 
     @Test
