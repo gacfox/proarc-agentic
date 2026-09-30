@@ -5,6 +5,7 @@ import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.handler.timeout.WriteTimeoutHandler;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -15,6 +16,7 @@ import reactor.netty.resources.ConnectionProvider;
 import javax.net.ssl.SSLException;
 import java.util.concurrent.TimeUnit;
 
+@Slf4j
 @Configuration
 @EnableConfigurationProperties(LlmHttpClientProperties.class)
 public class LlmHttpClientAutoConfiguration {
@@ -39,10 +41,14 @@ public class LlmHttpClientAutoConfiguration {
                         .addHandlerLast(new WriteTimeoutHandler(props.getWriteTimeout().toSeconds(), TimeUnit.SECONDS))
                 );
 
-        return configureSsl(httpClient);
+        return configureSsl(httpClient, props);
     }
 
-    private HttpClient configureSsl(HttpClient httpClient) {
+    private HttpClient configureSsl(HttpClient httpClient, LlmHttpClientProperties props) {
+        if (!props.isAllowInsecure()) {
+            return httpClient;
+        }
+        log.warn("proarc.agentic.http.allow-insecure=true，HTTPS证书校验已关闭，所有证书都将被信任，请勿在生产环境使用");
         return httpClient.secure(sslContextSpec -> {
             try {
                 sslContextSpec.sslContext(

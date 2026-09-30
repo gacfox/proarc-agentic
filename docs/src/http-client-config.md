@@ -21,6 +21,7 @@ proarc:
       response-timeout: 180s
       read-timeout: 180s
       write-timeout: 180s
+      allow-insecure: false
 ```
 
 全部配置项及其默认值如下。
@@ -36,6 +37,7 @@ proarc:
 | `response-timeout` | 180s | 等待响应的超时时间 |
 | `read-timeout` | 180s | 读超时，对应 Netty 的 `ReadTimeoutHandler` |
 | `write-timeout` | 180s | 写超时，对应 Netty 的 `WriteTimeoutHandler` |
+| `allow-insecure` | false | 是否跳过 HTTPS 证书校验，true 表示信任所有证书，仅适用于自签名证书的内网环境，生产环境应保持 false |
 
 ## 调优建议
 
@@ -61,4 +63,15 @@ public HttpClient llmHttpClient() {
 }
 ```
 
-一个需要知晓的默认行为：自动装配的连接池信任所有 SSL 证书（使用了 `InsecureTrustManagerFactory`），这是为了兼容企业内网自签名证书的自部署推理服务。如果对安全性有严格要求，应通过上面的方式自行注册 Bean 并使用正规的证书校验。
+## 证书校验
+
+默认情况下，自动装配的连接池对 HTTPS 端点执行正规的证书校验（使用 JVM 默认信任库）。如果 LLM 服务部署在企业内网并使用了自签名证书，可以通过 `allow-insecure: true` 跳过证书校验：
+
+```yaml
+proarc:
+  agentic:
+    http:
+      allow-insecure: true
+```
+
+开启后所有证书（包括过期、伪造的证书）都会被信任，存在中间人攻击风险，启动时会输出 WARN 日志提示，请勿在生产环境或对公网端点开启。如需使用私有 CA 证书做正规校验，可通过上面的方式自行注册 `llmHttpClient` Bean 并配置自定义 SSL 上下文。

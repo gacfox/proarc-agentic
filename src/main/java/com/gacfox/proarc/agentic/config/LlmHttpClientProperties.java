@@ -55,4 +55,9 @@ public class LlmHttpClientProperties {
      * 写超时
      */
     private Duration writeTimeout = Duration.ofSeconds(180);
+
+    /**
+     * 是否跳过HTTPS证书校验，true表示信任所有证书（仅适用于自签名证书的内网环境），默认false
+     */
+    private boolean allowInsecure = false;
 }
