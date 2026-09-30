@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.UUID;
 
 /**
  * 标准（OpenAI规范）大模型响应
@@ -198,7 +199,7 @@ public class ModelResponse implements Serializable {
                 for (Map.Entry<Integer, ToolCallBuilder> entry : tcMap.entrySet()) {
                     ToolCallBuilder tcb = entry.getValue();
                     mergedToolCalls.add(ToolCall.builder()
-                            .id(tcb.id)
+                            .id(normalizeToolCallId(tcb.id))
                             .index(entry.getKey())
                             .type(tcb.type)
                             .function(ToolCallFunction.builder()
@@ -229,6 +230,17 @@ public class ModelResponse implements Serializable {
                 .choices(mergedChoices)
                 .usage(usage)
                 .build();
+    }
+
+    /**
+     * 部分OpenAI兼容端点流式返回的tool_call缺少id，空id会导致消息历史中tool_call与tool结果无法配对，
+     * 统一兜底生成占位id
+     */
+    private static String normalizeToolCallId(String id) {
+        if (id != null && !id.isBlank()) {
+            return id;
+        }
+        return "call_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
     }
 
     private static class ToolCallBuilder {

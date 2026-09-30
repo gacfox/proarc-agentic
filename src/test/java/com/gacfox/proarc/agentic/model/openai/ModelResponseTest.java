@@ -81,6 +81,21 @@ class ModelResponseTest {
     }
 
     @Test
+    void generatesPlaceholderIdWhenToolCallIdMissing() {
+        ModelResponse merged = ModelResponse.mergeStreamChunks(List.of(
+                chunk("assistant", null, null, List.of(
+                        toolCallPart(null, 0, "tool_a", "{}"),
+                        toolCallPart("", 1, "tool_b", "{}")
+                ), "tool_calls", null)
+        ));
+
+        List<ToolCall> toolCalls = merged.extractBlockingToolCalls();
+        assertThat(toolCalls).hasSize(2);
+        assertThat(toolCalls).allSatisfy(tc -> assertThat(tc.getId()).isNotBlank());
+        assertThat(toolCalls.get(0).getId()).isNotEqualTo(toolCalls.get(1).getId());
+    }
+
+    @Test
     void skipsNullChunks() {
         List<ModelResponse> chunks = new ArrayList<>();
         chunks.add(null);
