@@ -366,6 +366,37 @@ class ReActAgentExecutorTest {
     }
 
     @Test
+    void reasoningContentIsStrippedFromMessageHistory() {
+        ModelResponse thinkingResponse = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .finishReason("tool_calls")
+                        .message(Message.builder()
+                                .role(Message.ROLE_ASSISTANT)
+                                .reasoningContent("让我思考一下天气")
+                                .toolCalls(List.of(ToolCall.builder()
+                                        .id("call-1")
+                                        .function(ToolCallFunction.builder()
+                                                .name("query_weather")
+                                                .arguments("{\"city\":\"北京\"}")
+                                                .build())
+                                        .build()))
+                                .build())
+                        .build()))
+                .build();
+        FakeLlmClient client = new FakeLlmClient(thinkingResponse, finalAnswerResponse("北京晴"));
+
+        List<AgentResponse> events = run(executor(client), context("北京天气怎么样？"));
+
+        assertThat(events).extracting(AgentResponse::getType).contains(AgentResponse.Type.THINKING);
+        Message assistantInHistory = client.receivedRequests.get(1).getMessages().stream()
+                .filter(m -> Message.ROLE_ASSISTANT.equals(m.getRole()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(assistantInHistory.getReasoningContent()).isNull();
+    }
+
+    @Test
     void cancelDuringLoopStopsLlmCalls() throws Exception {
         AtomicInteger llmCalls = new AtomicInteger();
         CountDownLatch firstToolResultSeen = new CountDownLatch(1);

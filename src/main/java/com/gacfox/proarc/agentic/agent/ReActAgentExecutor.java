@@ -120,9 +120,10 @@ public class ReActAgentExecutor {
         }
 
         Message assistantMessage = response.getChoices().getFirst().getMessage();
+        String thinking = response.extractBlockingReasoningContent();
+        assistantMessage.setReasoningContent(null);
         context.getMessages().add(assistantMessage);
 
-        String thinking = response.extractBlockingReasoningContent();
         if (StringUtils.hasText(thinking)) {
             emit(sink, responses, AgentResponse.thinking(thinking));
         }
