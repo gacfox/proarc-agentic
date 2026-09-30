@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 智能体执行上下文
@@ -83,9 +84,33 @@ public class AgentContext implements Serializable {
      */
     @Builder.Default
     private Map<String, Object> variables = new ConcurrentHashMap<>();
+    /**
+     * 停止请求标志，请求后执行器在当前步骤（LLM调用或工具执行）结束后尽快终止循环
+     */
+    @Builder.Default
+    private transient AtomicBoolean stopRequested = new AtomicBoolean();
 
     /**
-     * 创建当前智能体上下文快照，注意非完全深拷贝，仅用于防御性规避工具误改状态
+     * 请求停止本次智能体执行，协作式生效，不会中断正在执行的步骤
+     */
+    public void requestStop() {
+        if (stopRequested != null) {
+            stopRequested.set(true);
+        }
+    }
+
+    /**
+     * 是否已被请求停止
+     *
+     * @return true表示已请求停止
+     */
+    public boolean isStopRequested() {
+        return stopRequested != null && stopRequested.get();
+    }
+
+    /**
+     * 创建当前智能体上下文快照，注意非完全深拷贝，仅用于防御性规避工具误改状态；
+     * 停止标志与源上下文共享同一引用，工具可据此感知停止请求
      */
     public AgentContext snapshot() {
         return AgentContext.builder()
@@ -103,6 +128,7 @@ public class AgentContext implements Serializable {
                 .maxTokens(maxTokens)
                 .streaming(streaming)
                 .variables(variables == null ? null : new ConcurrentHashMap<>(variables))
+                .stopRequested(stopRequested)
                 .build();
     }
 }

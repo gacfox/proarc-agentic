@@ -60,8 +60,9 @@ public class ReActAgentExecutor {
                 .toList();
 
         for (int i = 0; i < this.maxIterations; i++) {
-            if (cancelled.get()) {
-                log.debug("Agent execution cancelled, contextId={}", context.getContextId());
+            if (cancelled.get() || context.isStopRequested()) {
+                log.debug("Agent execution stopped, contextId={}", context.getContextId());
+                emitSignal(sink, AgentResponse.stopped("Agent execution stopped by request."));
                 return;
             }
             AgentInterceptorChain chain = new AgentInterceptorChain() {
@@ -113,8 +114,11 @@ public class ReActAgentExecutor {
                 .toolChoice("auto")
                 .build();
         ModelResponse response = context.isStreaming()
-                ? streamingChat(llmClient, chatRequest, sink, cancelled)
+                ? streamingChat(llmClient, chatRequest, sink, cancelled, context)
                 : llmClient.blockingChat(chatRequest);
+        if (cancelled.get() || context.isStopRequested()) {
+            return AgentLoopResult.continueWith(responses);
+        }
         if (response.getChoices() == null || response.getChoices().isEmpty()) {
             throw new IllegalStateException("LLM returned an empty response");
         }
@@ -146,9 +150,6 @@ public class ReActAgentExecutor {
         List<ToolCall> toolCalls = response.extractBlockingToolCalls();
         String finalMessage = null;
         for (ToolCall toolCall : toolCalls) {
-            if (cancelled.get()) {
-                return AgentLoopResult.finishWith(responses);
-            }
             ToolCallFunction fn = toolCall.getFunction();
             String toolName = fn.getName();
             String arguments = fn.getArguments();
@@ -159,6 +160,13 @@ public class ReActAgentExecutor {
                 String skipped = "Skipped: the agent loop has already ended with final_answer.";
                 emit(sink, responses, AgentResponse.toolResult(toolCall.getId(), toolName, skipped));
                 context.getMessages().add(toolResultMessage(toolCall.getId(), skipped));
+                continue;
+            }
+
+            if (cancelled.get() || context.isStopRequested()) {
+                String stoppedNote = "Cancelled: the agent execution was stopped by request.";
+                emit(sink, responses, AgentResponse.toolResult(toolCall.getId(), toolName, stoppedNote));
+                context.getMessages().add(toolResultMessage(toolCall.getId(), stoppedNote));
                 continue;
             }
 
@@ -188,10 +196,10 @@ public class ReActAgentExecutor {
     }
 
     private ModelResponse streamingChat(LlmClient llmClient, ChatRequest chatRequest, Sinks.Many<AgentResponse> sink,
-                                        AtomicBoolean cancelled) {
+                                        AtomicBoolean cancelled, AgentContext context) {
         StreamingDeltaEmitter emitter = new StreamingDeltaEmitter(sink);
         llmClient.streamingChat(chatRequest)
-                .takeUntil(chunk -> cancelled.get())
+                .takeUntil(chunk -> cancelled.get() || context.isStopRequested())
                 .publishOn(Schedulers.boundedElastic())
                 .doOnNext(emitter::accept)
                 .blockLast();

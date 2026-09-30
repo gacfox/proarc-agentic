@@ -456,4 +456,104 @@ class ReActAgentExecutorTest {
         }
         assertThat(upstreamCancelled.get()).isTrue();
     }
+
+    static class StopAwareTools {
+        final AtomicBoolean weatherExecuted = new AtomicBoolean();
+
+        @AgenticTool(name = "stopper", description = "请求停止执行")
+        public String stopper(AgentContext context) {
+            context.requestStop();
+            return "stop requested";
+        }
+
+        @AgenticTool(name = "spy_weather", description = "查询天气")
+        public String spyWeather(@AgenticToolParam(name = "query", description = "查询条件") WeatherQuery query) {
+            weatherExecuted.set(true);
+            return "晴";
+        }
+    }
+
+    @Test
+    void stopRequestedBeforeExecuteSkipsLlmAndEmitsStopped() {
+        FakeLlmClient client = new FakeLlmClient(finalAnswerResponse("不应到达"));
+        AgentContext ctx = context("测试");
+        ctx.requestStop();
+
+        List<AgentResponse> events = run(executor(client), ctx);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().getType()).isEqualTo(AgentResponse.Type.STOPPED);
+        assertThat(client.receivedRequests).isEmpty();
+    }
+
+    @Test
+    void stopRequestedDuringToolLoopPairsRemainingToolCalls() {
+        StopAwareTools tools = new StopAwareTools();
+        toolRegistry.register(tools);
+        ModelResponse twoCalls = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .finishReason("tool_calls")
+                        .message(Message.builder()
+                                .role(Message.ROLE_ASSISTANT)
+                                .toolCalls(List.of(
+                                        ToolCall.builder()
+                                                .id("call-1")
+                                                .function(ToolCallFunction.builder().name("stopper").arguments("{}").build())
+                                                .build(),
+                                        ToolCall.builder()
+                                                .id("call-2")
+                                                .function(ToolCallFunction.builder().name("spy_weather").arguments("{\"city\":\"北京\"}").build())
+                                                .build()))
+                                .build())
+                        .build()))
+                .build();
+        FakeLlmClient client = new FakeLlmClient(twoCalls, finalAnswerResponse("不应到达"));
+        AgentContext ctx = context("测试");
+
+        List<AgentResponse> events = run(executorWithTools(client, "stopper", "spy_weather"), ctx);
+
+        assertThat(tools.weatherExecuted).isFalse();
+        assertThat(client.receivedRequests).hasSize(1);
+        assertThat(events.getLast().getType()).isEqualTo(AgentResponse.Type.STOPPED);
+        assertThat(events).anyMatch(e -> e.getType() == AgentResponse.Type.TOOL_RESULT
+                && "call-2".equals(e.getToolCallId()) && e.getContent().startsWith("Cancelled:"));
+        long toolResultMessages = ctx.getMessages().stream()
+                .filter(m -> Message.ROLE_TOOL.equals(m.getRole()))
+                .count();
+        assertThat(toolResultMessages).isEqualTo(2);
+    }
+
+    @Test
+    void stopRequestedDuringStreamingEmitsStoppedAndCompletes() throws Exception {
+        CountDownLatch firstDeltaSeen = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(1);
+        ModelResponse reasoningChunk = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .delta(Delta.builder().role("assistant").reasoning("思考中").build())
+                        .build()))
+                .build();
+        Flux<ModelResponse> endlessStream = Flux.<ModelResponse>generate(s -> s.next(reasoningChunk));
+
+        FakeLlmClient client = new FakeLlmClient().enqueueStreaming(endlessStream);
+        AgentContext ctx = context("测试");
+        ctx.setStreaming(true);
+
+        List<AgentResponse> events = new ArrayList<>();
+        executor(client).execute(ctx)
+                .doOnNext(e -> {
+                    events.add(e);
+                    firstDeltaSeen.countDown();
+                })
+                .doOnComplete(done::countDown)
+                .subscribe();
+
+        assertThat(firstDeltaSeen.await(5, TimeUnit.SECONDS)).isTrue();
+        ctx.requestStop();
+
+        assertThat(done.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(events).anyMatch(e -> e.getType() == AgentResponse.Type.STOPPED);
+        assertThat(client.receivedRequests).hasSize(1);
+    }
 }

@@ -46,7 +46,11 @@ public class AgentResponse implements Serializable {
         /**
          * 最终回答增量片段（仅streaming模式产生）
          */
-        FINAL_ANSWER_DELTA
+        FINAL_ANSWER_DELTA,
+        /**
+         * 智能体执行被外部请求停止
+         */
+        STOPPED
     }
 
     /**
@@ -144,5 +148,15 @@ public class AgentResponse implements Serializable {
      */
     public static AgentResponse finalAnswerDelta(String content) {
         return AgentResponse.builder().type(Type.FINAL_ANSWER_DELTA).content(content).build();
+    }
+
+    /**
+     * 生成智能体被停止事件
+     *
+     * @param content 停止说明
+     * @return 事件对象
+     */
+    public static AgentResponse stopped(String content) {
+        return AgentResponse.builder().type(Type.STOPPED).content(content).build();
     }
 }

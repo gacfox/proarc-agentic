@@ -43,7 +43,7 @@ public class OrderTools {
 工具方法的签名遵循以下约定：
 
 - 最多声明一个参数 DTO，且该参数必须标注 `@AgenticToolParam`
-- 可以额外声明一个 `AgentContext` 类型的参数（位置任意），框架会注入当前的智能体上下文快照，工具可以通过它读写共享变量，详见「ReAct 智能体」一章
+- 可以额外声明一个 `AgentContext` 类型的参数（位置任意），框架会注入当前的智能体上下文快照，工具可以通过它读写共享变量、感知停止请求（`isStopRequested()`），详见「ReAct 智能体」一章
 - 返回值的 `toString()` 结果作为工具执行结果返回给模型，一般返回 String 或可 JSON 序列化的对象
 - 无参数的工具方法可以不声明 DTO 参数，框架会生成空的参数 schema
 
