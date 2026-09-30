@@ -17,7 +17,10 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 重试拦截器，优先尝试使用Retry-After响应头，否则自动指数退避
+ * 重试拦截器，优先尝试使用Retry-After响应头，否则自动指数退避。
+ * <p>
+ * order为-200，处于内置拦截器最外层：每次重试都会重新经过限流拦截器，
+ * 避免退避期间长期占用并发许可导致健康请求被饿死
  */
 public class RetryInterceptor implements LlmInterceptor {
     private final int maxRetries;
@@ -100,7 +103,7 @@ public class RetryInterceptor implements LlmInterceptor {
 
     @Override
     public int getOrder() {
-        return 100;
+        return -200;
     }
 
     long computeDelay(int attempt, LlmException e) {

@@ -2,6 +2,7 @@ package com.gacfox.proarc.agentic.client.interceptor.builtin;
 
 import com.gacfox.proarc.agentic.client.interceptor.LlmInterceptorChain;
 import com.gacfox.proarc.agentic.exception.LlmAuthException;
+import com.gacfox.proarc.agentic.exception.LlmLocalRateLimitException;
 import com.gacfox.proarc.agentic.exception.LlmRateLimitException;
 import com.gacfox.proarc.agentic.exception.LlmRetryExhaustedException;
 import com.gacfox.proarc.agentic.exception.LlmTimeoutException;
@@ -12,7 +13,10 @@ import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -177,7 +181,112 @@ class RetryInterceptorTest {
     }
 
     @Test
-    void orderIs100() {
-        assertThat(new RetryInterceptor().getOrder()).isEqualTo(100);
+    void orderIsMinus200() {
+        assertThat(new RetryInterceptor().getOrder()).isEqualTo(-200);
+    }
+
+    @Test
+    void retryIsOutermostAmongBuiltinInterceptors() {
+        assertThat(new RetryInterceptor().getOrder())
+                .isLessThan(new LocalRateLimiterInterceptor(1).getOrder())
+                .isLessThan(new LocalConcurrencyLimitInterceptor(1).getOrder());
+    }
+
+    @Test
+    void permitIsReleasedDuringBackoffSoOtherRequestsCanProceed() throws Exception {
+        LocalConcurrencyLimitInterceptor concurrency = new LocalConcurrencyLimitInterceptor(1);
+        RetryInterceptor retry = new RetryInterceptor(1, 200, 200);
+
+        AtomicInteger attempts = new AtomicInteger();
+        CountDownLatch firstAttemptFailed = new CountDownLatch(1);
+        CountDownLatch secondRequestDone = new CountDownLatch(1);
+        AtomicReference<Object> secondResult = new AtomicReference<>();
+
+        // 组装顺序与 AbstractLlmClient 一致：重试（-200）在最外层，每次重试都会重新经过并发限流
+        LlmInterceptorChain innermost = new LlmInterceptorChain() {
+            @Override
+            public ModelResponse nextBlocking(ModelRequest request) {
+                if (attempts.incrementAndGet() == 1) {
+                    firstAttemptFailed.countDown();
+                    throw timeout();
+                }
+                return RESPONSE;
+            }
+
+            @Override
+            public Flux<ModelResponse> nextStreaming(ModelRequest request) {
+                throw new UnsupportedOperationException();
+            }
+        };
+        LlmInterceptorChain concurrencyChain = new LlmInterceptorChain() {
+            @Override
+            public ModelResponse nextBlocking(ModelRequest request) {
+                return concurrency.interceptBlocking(request, MODEL_INFO, innermost);
+            }
+
+            @Override
+            public Flux<ModelResponse> nextStreaming(ModelRequest request) {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        // 第一个请求：第一次尝试失败，进入 200ms 退避，期间并发许可应已释放
+        Thread retrying = new Thread(() ->
+                retry.interceptBlocking(REQUEST, MODEL_INFO, concurrencyChain));
+        retrying.start();
+        assertThat(firstAttemptFailed.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // 第二个请求：在第一个请求退避期间应能抢到许可并成功
+        Thread second = new Thread(() -> {
+            try {
+                secondResult.set(retry.interceptBlocking(REQUEST, MODEL_INFO, concurrencyChain));
+            } catch (Exception e) {
+                secondResult.set(e);
+            } finally {
+                secondRequestDone.countDown();
+            }
+        });
+        second.start();
+
+        assertThat(secondRequestDone.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(secondResult.get()).isSameAs(RESPONSE);
+        retrying.join(5000);
+    }
+
+    @Test
+    void eachRetryAttemptConsumesRateLimitToken() {
+        LocalRateLimiterInterceptor rateLimiter = new LocalRateLimiterInterceptor(2);
+        RetryInterceptor retry = new RetryInterceptor(5, 1, 5);
+
+        AtomicInteger attempts = new AtomicInteger();
+        LlmInterceptorChain innermost = new LlmInterceptorChain() {
+            @Override
+            public ModelResponse nextBlocking(ModelRequest request) {
+                attempts.incrementAndGet();
+                throw timeout();
+            }
+
+            @Override
+            public Flux<ModelResponse> nextStreaming(ModelRequest request) {
+                throw new UnsupportedOperationException();
+            }
+        };
+        LlmInterceptorChain rateLimitChain = new LlmInterceptorChain() {
+            @Override
+            public ModelResponse nextBlocking(ModelRequest request) {
+                return rateLimiter.interceptBlocking(request, MODEL_INFO, innermost);
+            }
+
+            @Override
+            public Flux<ModelResponse> nextStreaming(ModelRequest request) {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        // maxQps=2：第 1、2 次尝试消耗令牌后，第 3 次尝试被本地限流拒绝（可重试，继续退避）
+        assertThatThrownBy(() -> retry.interceptBlocking(REQUEST, MODEL_INFO, rateLimitChain))
+                .isInstanceOfSatisfying(LlmRetryExhaustedException.class, e ->
+                        assertThat(e.getLastCause()).isInstanceOf(LlmLocalRateLimitException.class));
+        assertThat(attempts).hasValue(2);
     }
 }
