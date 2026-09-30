@@ -245,7 +245,10 @@ public abstract class AbstractLlmClient implements LlmClient {
                 try {
                     String retryAfterStr = e.getHeaders().getFirst("Retry-After");
                     if (StringUtils.hasText(retryAfterStr)) {
-                        retryAfter = Long.parseLong(retryAfterStr) * 1000L;
+                        long seconds = Long.parseLong(retryAfterStr);
+                        if (seconds >= 0) {
+                            retryAfter = seconds > Long.MAX_VALUE / 1000L ? Long.MAX_VALUE : seconds * 1000L;
+                        }
                     }
                 } catch (NumberFormatException ignored) {
                 }

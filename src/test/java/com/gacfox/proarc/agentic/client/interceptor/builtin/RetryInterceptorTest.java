@@ -118,6 +118,14 @@ class RetryInterceptorTest {
     }
 
     @Test
+    void computeDelayClampsRetryAfterToMaxDelay() {
+        RetryInterceptor interceptor = new RetryInterceptor(1, 1000, 30000);
+        LlmRateLimitException rateLimit = new LlmRateLimitException("rl", null, "p", "m", 429, null, null, 86_400_000L);
+
+        assertThat(interceptor.computeDelay(0, rateLimit)).isEqualTo(30000L);
+    }
+
+    @Test
     void computeDelayCapsAtMaxDelay() {
         RetryInterceptor interceptor = new RetryInterceptor(5, 1000, 2000);
 

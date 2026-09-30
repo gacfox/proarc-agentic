@@ -140,6 +140,33 @@ class OpenAiLlmClientTest {
     }
 
     @Test
+    void hugeRetryAfterBeyondLongRangeIsIgnored() {
+        server.enqueue(errorResponse(429, "slow down").setHeader("Retry-After", "9999999999999999999"));
+
+        assertThatThrownBy(() -> client.blockingChat(chatRequest()))
+                .isInstanceOfSatisfying(LlmRateLimitException.class, e ->
+                        assertThat(e.getRetryAfterMillis()).isNull());
+    }
+
+    @Test
+    void retryAfterMultiplicationOverflowIsClamped() {
+        server.enqueue(errorResponse(429, "slow down").setHeader("Retry-After", "9999999999999999"));
+
+        assertThatThrownBy(() -> client.blockingChat(chatRequest()))
+                .isInstanceOfSatisfying(LlmRateLimitException.class, e ->
+                        assertThat(e.getRetryAfterMillis()).isEqualTo(Long.MAX_VALUE));
+    }
+
+    @Test
+    void negativeRetryAfterIsIgnored() {
+        server.enqueue(errorResponse(429, "slow down").setHeader("Retry-After", "-5"));
+
+        assertThatThrownBy(() -> client.blockingChat(chatRequest()))
+                .isInstanceOfSatisfying(LlmRateLimitException.class, e ->
+                        assertThat(e.getRetryAfterMillis()).isNull());
+    }
+
+    @Test
     void serverErrorMapsToRetryableServerException() {
         server.enqueue(errorResponse(500, "internal error"));
 

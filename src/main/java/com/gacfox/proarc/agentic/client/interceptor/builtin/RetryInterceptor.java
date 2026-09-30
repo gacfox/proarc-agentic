@@ -107,9 +107,9 @@ public class RetryInterceptor implements LlmInterceptor {
     }
 
     long computeDelay(int attempt, LlmException e) {
-        // 429 时优先使用 Retry-After
+        // 429 时优先使用 Retry-After，但同样受 maxDelayMillis 上限约束
         if (e instanceof LlmRateLimitException rl && rl.getRetryAfterMillis() != null) {
-            return rl.getRetryAfterMillis();
+            return Math.min(rl.getRetryAfterMillis(), maxDelayMillis);
         }
         // 指数退避 + jitter
         long delay = (long) (baseDelayMillis * Math.pow(2, attempt));
