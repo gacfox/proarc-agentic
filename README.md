@@ -48,8 +48,8 @@ mvn install
 ```java
 ModelInfo modelInfo = ModelInfo.builder()
         .provider("openai")
-        .model("qwen-plus")
-        .endpoint("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
+        .model("deepseek-v4-flash")
+        .endpoint("http://localhost:11434/v1/chat/completions")
         .sk(System.getenv("LLM_API_KEY"))
         .capabilities(List.of(ModelInfo.CAPABILITY_REASONING, ModelInfo.CAPABILITY_TOOL))
         .build();

@@ -64,7 +64,7 @@ classDiagram
 
 在深入各个章节之前，有几个贯穿全框架的约定值得先了解。
 
-**OpenAI 兼容端点是内置协议：** 框架内置的 `OpenAiLlmClient` 面向所有兼容 OpenAI Chat Completions 规范的端点，无论是 OpenAI 官方、国内的兼容服务（如阿里 DashScope 的兼容模式），还是 vLLM 等自部署推理框架，都可以直接接入。如果使用的端点不兼容 OpenAI 规范，也可以自行继承 `AbstractLlmClient` 实现自定义客户端，拦截器链与异常体系可以直接复用，具体方法见「LlmClient」一章的扩展部分。
+**OpenAI 兼容端点是内置协议：** 框架内置的 `OpenAiLlmClient` 面向所有兼容 OpenAI Chat Completions 规范的端点，无论是 OpenAI 官方、DeepSeek 兼容端点，还是 llama.cpp 等自部署推理框架，都可以直接接入。如果使用的端点不兼容 OpenAI 规范，也可以自行继承 `AbstractLlmClient` 实现自定义客户端，拦截器链与异常体系可以直接复用，具体方法见「LlmClient」一章的扩展部分。
 
 **阻塞调用建立在流式之上：** `OpenAiLlmClient` 的阻塞式调用内部实际上是发起流式请求并聚合所有分片的结果。这样做的好处是两种调用方式的行为完全一致，拦截器、异常处理只需要针对一套链路实现，同时也避免了长文本生成时，阻塞请求容易在请求链路中的某个网关上超时的问题。
 
