@@ -77,6 +77,26 @@ class LocalRateLimiterInterceptorTest {
     }
 
     @Test
+    void assemblyWithoutSubscriptionDoesNotConsumeToken() {
+        LocalRateLimiterInterceptor interceptor = new LocalRateLimiterInterceptor(1);
+
+        interceptor.interceptStreaming(REQUEST, MODEL_INFO, stubChain());
+        interceptor.interceptStreaming(REQUEST, MODEL_INFO, stubChain());
+
+        assertThat(interceptor.interceptBlocking(REQUEST, MODEL_INFO, stubChain())).isSameAs(RESPONSE);
+    }
+
+    @Test
+    void resubscriptionConsumesTokenPerSubscription() {
+        LocalRateLimiterInterceptor interceptor = new LocalRateLimiterInterceptor(2);
+
+        Flux<ModelResponse> flux = interceptor.interceptStreaming(REQUEST, MODEL_INFO, stubChain());
+        StepVerifier.create(flux).expectNext(RESPONSE).verifyComplete();
+        StepVerifier.create(flux).expectNext(RESPONSE).verifyComplete();
+        StepVerifier.create(flux).expectError(LlmLocalRateLimitException.class).verify();
+    }
+
+    @Test
     void rateLimitExceptionIsRetryable() {
         LocalRateLimiterInterceptor interceptor = new LocalRateLimiterInterceptor(1);
         interceptor.interceptBlocking(REQUEST, MODEL_INFO, stubChain());

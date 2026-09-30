@@ -42,12 +42,14 @@ public class LocalRateLimiterInterceptor implements LlmInterceptor {
 
     @Override
     public Flux<ModelResponse> interceptStreaming(ModelRequest request, ModelInfo modelInfo, LlmInterceptorChain chain) {
-        if (tryAcquire()) {
-            return chain.nextStreaming(request);
-        }
-        return Flux.error(new LlmLocalRateLimitException(
-                "Local rate limit exceeded (maxQps=" + maxQps + ")",
-                modelInfo.getProvider(), modelInfo.getModel()));
+        return Flux.defer(() -> {
+            if (tryAcquire()) {
+                return chain.nextStreaming(request);
+            }
+            return Flux.error(new LlmLocalRateLimitException(
+                    "Local rate limit exceeded (maxQps=" + maxQps + ")",
+                    modelInfo.getProvider(), modelInfo.getModel()));
+        });
     }
 
     @Override

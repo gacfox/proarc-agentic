@@ -102,8 +102,7 @@ class LocalConcurrencyLimitInterceptorTest {
             }
         };
 
-        Flux<ModelResponse> flux = interceptor.interceptStreaming(REQUEST, MODEL_INFO, neverChain);
-        Disposable subscription = flux.subscribe();
+        Disposable subscription = interceptor.interceptStreaming(REQUEST, MODEL_INFO, neverChain).subscribe();
 
         assertThatThrownBy(() -> interceptor.interceptBlocking(REQUEST, MODEL_INFO, stubChain()))
                 .isInstanceOf(LlmConcurrencyLimitException.class);
@@ -113,19 +112,48 @@ class LocalConcurrencyLimitInterceptorTest {
     }
 
     @Test
-    void streamingExhaustedReturnsErrorFlux() {
+    void assemblyWithoutSubscriptionDoesNotConsumePermit() {
         LocalConcurrencyLimitInterceptor interceptor = new LocalConcurrencyLimitInterceptor(1);
 
-        StepVerifier.create(interceptor.interceptStreaming(REQUEST, MODEL_INFO, stubChain()))
-                .expectNext(RESPONSE)
-                .verifyComplete();
-        assertThat(interceptor.interceptStreaming(REQUEST, MODEL_INFO, stubChain())).isNotNull();
+        interceptor.interceptStreaming(REQUEST, MODEL_INFO, stubChain());
+        interceptor.interceptStreaming(REQUEST, MODEL_INFO, stubChain());
 
-        LocalConcurrencyLimitInterceptor exhausted = new LocalConcurrencyLimitInterceptor(1);
-        exhausted.interceptStreaming(REQUEST, MODEL_INFO, stubChain());
-        StepVerifier.create(exhausted.interceptStreaming(REQUEST, MODEL_INFO, stubChain()))
-                .expectError(LlmConcurrencyLimitException.class)
-                .verify();
+        assertThat(interceptor.interceptBlocking(REQUEST, MODEL_INFO, stubChain())).isSameAs(RESPONSE);
+    }
+
+    @Test
+    void resubscriptionAcquiresAndReleasesPermitPerSubscription() {
+        LocalConcurrencyLimitInterceptor interceptor = new LocalConcurrencyLimitInterceptor(1);
+
+        Flux<ModelResponse> flux = interceptor.interceptStreaming(REQUEST, MODEL_INFO, stubChain());
+        StepVerifier.create(flux).expectNext(RESPONSE).verifyComplete();
+        StepVerifier.create(flux).expectNext(RESPONSE).verifyComplete();
+
+        assertThat(interceptor.interceptBlocking(REQUEST, MODEL_INFO, stubChain())).isSameAs(RESPONSE);
+    }
+
+    @Test
+    void streamingExhaustedReturnsErrorFlux() {
+        LocalConcurrencyLimitInterceptor interceptor = new LocalConcurrencyLimitInterceptor(1);
+        LlmInterceptorChain neverChain = new LlmInterceptorChain() {
+            @Override
+            public ModelResponse nextBlocking(ModelRequest request) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public Flux<ModelResponse> nextStreaming(ModelRequest request) {
+                return Flux.never();
+            }
+        };
+        Disposable held = interceptor.interceptStreaming(REQUEST, MODEL_INFO, neverChain).subscribe();
+        try {
+            StepVerifier.create(interceptor.interceptStreaming(REQUEST, MODEL_INFO, stubChain()))
+                    .expectError(LlmConcurrencyLimitException.class)
+                    .verify();
+        } finally {
+            held.dispose();
+        }
     }
 
     @Test

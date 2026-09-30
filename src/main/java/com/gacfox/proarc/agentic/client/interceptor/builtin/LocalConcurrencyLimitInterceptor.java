@@ -7,6 +7,7 @@ import com.gacfox.proarc.agentic.model.openai.ModelInfo;
 import com.gacfox.proarc.agentic.model.openai.ModelRequest;
 import com.gacfox.proarc.agentic.model.openai.ModelResponse;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.util.concurrent.Semaphore;
 
@@ -46,13 +47,19 @@ public class LocalConcurrencyLimitInterceptor implements LlmInterceptor {
 
     @Override
     public Flux<ModelResponse> interceptStreaming(ModelRequest request, ModelInfo modelInfo, LlmInterceptorChain chain) {
-        if (!semaphore.tryAcquire()) {
-            return Flux.error(new LlmConcurrencyLimitException(
-                    "Local concurrency limit exceeded (maxConcurrency=" + maxConcurrency + ")",
-                    modelInfo.getProvider(), modelInfo.getModel()));
-        }
-        return chain.nextStreaming(request)
-                .doFinally(signal -> semaphore.release());
+        return Flux.usingWhen(
+                Mono.fromSupplier(semaphore::tryAcquire),
+                acquired -> acquired
+                        ? chain.nextStreaming(request)
+                        : Flux.error(new LlmConcurrencyLimitException(
+                                "Local concurrency limit exceeded (maxConcurrency=" + maxConcurrency + ")",
+                                modelInfo.getProvider(), modelInfo.getModel())),
+                acquired -> {
+                    if (Boolean.TRUE.equals(acquired)) {
+                        semaphore.release();
+                    }
+                    return Mono.empty();
+                });
     }
 
     @Override
