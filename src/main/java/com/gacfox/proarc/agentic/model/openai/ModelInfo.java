@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.io.Serializable;
 import java.util.List;
@@ -32,6 +33,7 @@ public class ModelInfo implements Serializable {
     /**
      * API密钥
      */
+    @ToString.Exclude
     private String sk;
     /**
      * 模型上下文
@@ -48,6 +50,7 @@ public class ModelInfo implements Serializable {
     /**
      * 自定义静态请求Header，会覆盖同名默认Header，动态Header（LlmHeaderProvider）优先级高于此配置
      */
+    @ToString.Exclude
     private Map<String, String> headers;
 
     /**
