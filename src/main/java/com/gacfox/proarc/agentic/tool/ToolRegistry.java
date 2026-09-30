@@ -6,6 +6,7 @@ import com.gacfox.proarc.agentic.model.openai.Tool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.aop.support.AopUtils;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
@@ -29,7 +30,7 @@ public class ToolRegistry {
      * @param bean 智能体工具实例
      */
     public void register(Object bean) {
-        Class<?> clazz = bean.getClass();
+        Class<?> clazz = AopUtils.getTargetClass(bean);
 
         for (Method method : clazz.getDeclaredMethods()) {
             AgenticTool agenticTool = method.getAnnotation(AgenticTool.class);
@@ -150,8 +151,18 @@ public class ToolRegistry {
             if (finalCtxIndex >= 0) {
                 args[finalCtxIndex] = ctx;
             }
-            Object result = method.invoke(bean, args);
+            Object result = invokeToolMethod(bean, method, args);
             return result != null ? result.toString() : "null";
         };
+    }
+
+    private Object invokeToolMethod(Object bean, Method method, Object[] args) throws Exception {
+        try {
+            return method.invoke(bean, args);
+        } catch (IllegalArgumentException e) {
+            Method proxyMethod = bean.getClass().getMethod(method.getName(), method.getParameterTypes());
+            proxyMethod.setAccessible(true);
+            return proxyMethod.invoke(bean, args);
+        }
     }
 }

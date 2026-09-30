@@ -2,6 +2,7 @@ package com.gacfox.proarc.agentic.config;
 
 import com.gacfox.proarc.agentic.tool.AgenticTool;
 import com.gacfox.proarc.agentic.tool.ToolRegistry;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -21,7 +22,7 @@ public class ToolRegistryAutoConfiguration {
         return new BeanPostProcessor() {
             @Override
             public Object postProcessAfterInitialization(Object bean, String beanName) {
-                for (Method method : bean.getClass().getDeclaredMethods()) {
+                for (Method method : AopUtils.getTargetClass(bean).getDeclaredMethods()) {
                     if (method.isAnnotationPresent(AgenticTool.class)) {
                         toolRegistry.register(bean);
                         break;
