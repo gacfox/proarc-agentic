@@ -17,6 +17,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * ReAct智能体执行器
@@ -36,9 +37,10 @@ public class ReActAgentExecutor {
 
     public Flux<AgentResponse> execute(AgentContext context) {
         Sinks.Many<AgentResponse> sink = Sinks.many().unicast().onBackpressureBuffer();
+        AtomicBoolean cancelled = new AtomicBoolean();
         Schedulers.boundedElastic().schedule(() -> {
             try {
-                doExecute(context, sink);
+                doExecute(context, sink, cancelled);
             } catch (Exception e) {
                 log.error("Agent execution error", e);
                 emitSignal(sink, AgentResponse.error(e.getMessage()));
@@ -46,10 +48,10 @@ public class ReActAgentExecutor {
                 sink.tryEmitComplete();
             }
         });
-        return sink.asFlux();
+        return sink.asFlux().doOnCancel(() -> cancelled.set(true));
     }
 
-    private void doExecute(AgentContext context, Sinks.Many<AgentResponse> sink) {
+    private void doExecute(AgentContext context, Sinks.Many<AgentResponse> sink, AtomicBoolean cancelled) {
         context.setMessages(new ArrayList<>(context.getMessages()));
         List<AgentInterceptor> sortedInterceptors = Optional.ofNullable(interceptors)
                 .orElseGet(Collections::emptyList)
@@ -58,6 +60,10 @@ public class ReActAgentExecutor {
                 .toList();
 
         for (int i = 0; i < this.maxIterations; i++) {
+            if (cancelled.get()) {
+                log.debug("Agent execution cancelled, contextId={}", context.getContextId());
+                return;
+            }
             AgentInterceptorChain chain = new AgentInterceptorChain() {
                 int index = 0;
 
@@ -67,7 +73,7 @@ public class ReActAgentExecutor {
                         AgentInterceptor interceptor = sortedInterceptors.get(index++);
                         return interceptor.intercept(context, this);
                     }
-                    return executeLoop(context, sink);
+                    return executeLoop(context, sink, cancelled);
                 }
             };
 
@@ -80,7 +86,7 @@ public class ReActAgentExecutor {
         emitSignal(sink, AgentResponse.error("Agent reached maximum iterations"));
     }
 
-    private AgentLoopResult executeLoop(AgentContext context, Sinks.Many<AgentResponse> sink) {
+    private AgentLoopResult executeLoop(AgentContext context, Sinks.Many<AgentResponse> sink, AtomicBoolean cancelled) {
         LlmClient llmClient = context.getLlmClient() != null ? context.getLlmClient() : defaultLlmClient;
         List<String> toolNames = context.getToolNames() != null && !context.getToolNames().isEmpty()
                 ? context.getToolNames() : defaultToolNames;
@@ -107,7 +113,7 @@ public class ReActAgentExecutor {
                 .toolChoice("auto")
                 .build();
         ModelResponse response = context.isStreaming()
-                ? streamingChat(llmClient, chatRequest, sink)
+                ? streamingChat(llmClient, chatRequest, sink, cancelled)
                 : llmClient.blockingChat(chatRequest);
         if (response.getChoices() == null || response.getChoices().isEmpty()) {
             throw new IllegalStateException("LLM returned an empty response");
@@ -139,6 +145,9 @@ public class ReActAgentExecutor {
         List<ToolCall> toolCalls = response.extractBlockingToolCalls();
         String finalMessage = null;
         for (ToolCall toolCall : toolCalls) {
+            if (cancelled.get()) {
+                return AgentLoopResult.finishWith(responses);
+            }
             ToolCallFunction fn = toolCall.getFunction();
             String toolName = fn.getName();
             String arguments = fn.getArguments();
@@ -174,9 +183,11 @@ public class ReActAgentExecutor {
                 : AgentLoopResult.continueWith(responses);
     }
 
-    private ModelResponse streamingChat(LlmClient llmClient, ChatRequest chatRequest, Sinks.Many<AgentResponse> sink) {
+    private ModelResponse streamingChat(LlmClient llmClient, ChatRequest chatRequest, Sinks.Many<AgentResponse> sink,
+                                        AtomicBoolean cancelled) {
         StreamingDeltaEmitter emitter = new StreamingDeltaEmitter(sink);
         llmClient.streamingChat(chatRequest)
+                .takeUntil(chunk -> cancelled.get())
                 .publishOn(Schedulers.boundedElastic())
                 .doOnNext(emitter::accept)
                 .blockLast();

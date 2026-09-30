@@ -16,6 +16,7 @@ import com.gacfox.proarc.agentic.tool.ToolRegistry;
 import lombok.Data;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
@@ -23,6 +24,10 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -308,5 +313,66 @@ class ReActAgentExecutorTest {
 
         assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.ERROR);
         assertThat(events.getLast().getContent()).contains("empty response");
+    }
+
+    @Test
+    void cancelDuringLoopStopsLlmCalls() throws Exception {
+        AtomicInteger llmCalls = new AtomicInteger();
+        CountDownLatch firstToolResultSeen = new CountDownLatch(1);
+        FakeLlmClient endless = new FakeLlmClient() {
+            @Override
+            public ModelResponse blockingChat(ChatRequest chatRequest) {
+                int n = llmCalls.incrementAndGet();
+                return toolCallResponse("call-" + n, "query_weather", "{\"city\":\"北京\"}");
+            }
+        };
+
+        Disposable subscription = executor(endless).execute(context("测试"))
+                .doOnNext(e -> {
+                    if (e.getType() == AgentResponse.Type.TOOL_RESULT) {
+                        firstToolResultSeen.countDown();
+                    }
+                })
+                .subscribe();
+
+        assertThat(firstToolResultSeen.await(5, TimeUnit.SECONDS)).isTrue();
+        subscription.dispose();
+
+        int callsAtCancel = llmCalls.get();
+        Thread.sleep(300);
+        // 允许一次在途竞态，之后LLM调用必须停止增长
+        assertThat(llmCalls.get()).isLessThanOrEqualTo(callsAtCancel + 1);
+    }
+
+    @Test
+    void cancelDuringStreamingCancelsUpstreamFlux() throws Exception {
+        AtomicBoolean upstreamCancelled = new AtomicBoolean();
+        CountDownLatch firstDeltaSeen = new CountDownLatch(1);
+
+        ModelResponse reasoningChunk = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .delta(Delta.builder().role("assistant").reasoning("思考中").build())
+                        .build()))
+                .build();
+        Flux<ModelResponse> endlessStream = Flux.<ModelResponse>generate(s -> s.next(reasoningChunk))
+                .doOnCancel(() -> upstreamCancelled.set(true));
+
+        FakeLlmClient client = new FakeLlmClient().enqueueStreaming(endlessStream);
+        AgentContext ctx = context("测试");
+        ctx.setStreaming(true);
+
+        Disposable subscription = executor(client).execute(ctx)
+                .doOnNext(e -> firstDeltaSeen.countDown())
+                .subscribe();
+
+        assertThat(firstDeltaSeen.await(5, TimeUnit.SECONDS)).isTrue();
+        subscription.dispose();
+
+        long deadline = System.currentTimeMillis() + 5000;
+        while (!upstreamCancelled.get() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50);
+        }
+        assertThat(upstreamCancelled.get()).isTrue();
     }
 }
