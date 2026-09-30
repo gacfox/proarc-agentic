@@ -44,6 +44,11 @@ class ReActAgentExecutorTest {
         public String queryWeather(@AgenticToolParam(name = "query", description = "查询条件") WeatherQuery query) {
             return query.getCity() + "：晴，26℃";
         }
+
+        @AgenticTool(name = "current_time", description = "获取当前时间")
+        public String currentTime() {
+            return "12:00";
+        }
     }
 
     static class FakeLlmClient implements LlmClient {
@@ -122,6 +127,51 @@ class ReActAgentExecutorTest {
                 .toolRegistry(toolRegistry)
                 .defaultToolNames(List.of("query_weather"))
                 .build();
+    }
+
+    private ReActAgentExecutor executorWithTools(FakeLlmClient client, String... toolNames) {
+        return ReActAgentExecutor.builder()
+                .defaultLlmClient(client)
+                .toolRegistry(toolRegistry)
+                .defaultToolNames(List.of(toolNames))
+                .build();
+    }
+
+    @Test
+    void emptyStringArgumentsForNoArgToolInvokesNormally() {
+        FakeLlmClient client = new FakeLlmClient(
+                toolCallResponse("call-1", "current_time", ""),
+                finalAnswerResponse("现在是12点"));
+
+        List<AgentResponse> events = run(executorWithTools(client, "current_time"), context("现在几点？"));
+
+        assertThat(events.get(1).getType()).isEqualTo(AgentResponse.Type.TOOL_RESULT);
+        assertThat(events.get(1).getContent()).isEqualTo("12:00");
+        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.FINAL_ANSWER);
+    }
+
+    @Test
+    void nullArgumentsForNoArgToolInvokesNormally() {
+        FakeLlmClient client = new FakeLlmClient(
+                toolCallResponse("call-1", "current_time", null),
+                finalAnswerResponse("现在是12点"));
+
+        List<AgentResponse> events = run(executorWithTools(client, "current_time"), context("现在几点？"));
+
+        assertThat(events.get(1).getType()).isEqualTo(AgentResponse.Type.TOOL_RESULT);
+        assertThat(events.get(1).getContent()).isEqualTo("12:00");
+    }
+
+    @Test
+    void blankArgumentsForNoArgToolInvokesNormally() {
+        FakeLlmClient client = new FakeLlmClient(
+                toolCallResponse("call-1", "current_time", "   "),
+                finalAnswerResponse("现在是12点"));
+
+        List<AgentResponse> events = run(executorWithTools(client, "current_time"), context("现在几点？"));
+
+        assertThat(events.get(1).getType()).isEqualTo(AgentResponse.Type.TOOL_RESULT);
+        assertThat(events.get(1).getContent()).isEqualTo("12:00");
     }
 
     @Test

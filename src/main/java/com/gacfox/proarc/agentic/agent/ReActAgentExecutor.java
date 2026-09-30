@@ -169,7 +169,10 @@ public class ReActAgentExecutor {
             }
 
             String result;
-            if (isValidJson(arguments)) {
+            if (!StringUtils.hasText(arguments)) {
+                fn.setArguments("{}");
+                result = invokeTool(toolMap, toolName, "{}", context);
+            } else if (isValidJson(arguments)) {
                 result = invokeTool(toolMap, toolName, arguments, context);
             } else {
                 fn.setArguments("{}");
