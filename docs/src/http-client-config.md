@@ -18,7 +18,6 @@ proarc:
       max-idle-time: 20s
       max-life-time: 5m
       connect-timeout: 15s
-      response-timeout: 180s
       read-timeout: 180s
       write-timeout: 180s
       allow-insecure: false
@@ -34,8 +33,8 @@ proarc:
 | `max-idle-time` | 20s | 连接最大空闲时间，超时连接被回收 |
 | `max-life-time` | 5m | 连接最大存活时间，超时连接被回收 |
 | `connect-timeout` | 15s | 建立 TCP 连接的超时时间 |
-| `response-timeout` | 180s | 等待响应的超时时间 |
-| `read-timeout` | 180s | 读超时，对应 Netty 的 `ReadTimeoutHandler` |
+| `response-timeout` | 不启用 | 整体响应超时，**包含整个流式周期**，流式场景不建议启用；默认 null 表示不设上限 |
+| `read-timeout` | 180s | 读空闲超时，对应 Netty 的 `ReadTimeoutHandler`，按两次数据到达的间隔计算 |
 | `write-timeout` | 180s | 写超时，对应 Netty 的 `WriteTimeoutHandler` |
 | `allow-insecure` | false | 是否跳过 HTTPS 证书校验，true 表示信任所有证书，仅适用于自签名证书的内网环境，生产环境应保持 false |
 
@@ -43,7 +42,7 @@ proarc:
 
 默认值是面向一般企业级应用给出的。实际项目中，有几个参数值得根据场景调整。
 
-**超时时间与流式调用的关系：** LLM 生成长文本时耗时较长，`response-timeout` 和 `read-timeout` 的默认值 180s 就是为流式场景考虑的。Netty 的读超时按两次数据到达的间隔计算而不是整体耗时，因此流式响应持续有数据到达时不会轻易触发；但如果模型长时间不出字（例如 reasoning 模型长时间思考），间隔超过 180s 就会触发超时并映射为可重试的 `LlmTimeoutException`。接入这类模型时可以适当调大
+**超时时间与流式调用的关系：** 框架的所有调用（包括阻塞模式）底层都走 SSE 流式链路，因此流式保护由 `read-timeout` 的空闲语义承担：模型只要持续出字就不会触发超时，长时间思考（如 reasoning 模型）导致的数据间隔超过 180s 才会断开，映射为可重试的 `LlmTimeoutException`，接入这类模型时可以适当调大。`response-timeout` 统计的是整个流的总时长，长文本生成很容易超限并被中途掐断（此时已有内容产出，重试被保护机制禁止，请求必然失败），因此默认不启用；只有确实需要「单次调用最长不超过 X」硬上限的场景才显式配置它
 
 **连接数与并发限流的配合：** 如果客户端挂了 `LocalConcurrencyLimitInterceptor`，`max-connections` 设置得比并发上限大一些即可，没有放大连接数的必要；反过来，如果没有限流拦截器，`max-connections` 和 `pending-acquire-timeout` 就是保护本机的最后防线，连接耗尽时获取连接会等待直至超时
 

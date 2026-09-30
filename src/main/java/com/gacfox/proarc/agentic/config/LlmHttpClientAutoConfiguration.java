@@ -35,11 +35,14 @@ public class LlmHttpClientAutoConfiguration {
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) props.getConnectTimeout().toMillis())
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.SO_KEEPALIVE, true)
-                .responseTimeout(props.getResponseTimeout())
                 .doOnConnected(conn -> conn
                         .addHandlerLast(new ReadTimeoutHandler(props.getReadTimeout().toSeconds(), TimeUnit.SECONDS))
                         .addHandlerLast(new WriteTimeoutHandler(props.getWriteTimeout().toSeconds(), TimeUnit.SECONDS))
                 );
+
+        if (props.getResponseTimeout() != null) {
+            httpClient = httpClient.responseTimeout(props.getResponseTimeout());
+        }
 
         return configureSsl(httpClient, props);
     }

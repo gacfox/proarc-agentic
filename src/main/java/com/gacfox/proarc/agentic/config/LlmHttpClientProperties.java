@@ -42,9 +42,10 @@ public class LlmHttpClientProperties {
     private Duration connectTimeout = Duration.ofSeconds(15);
 
     /**
-     * 响应超时
+     * 整体响应超时（包含整个流式周期），默认null不启用；
+     * 流式场景不建议启用，防止连接空转请使用readTimeout（空闲超时）
      */
-    private Duration responseTimeout = Duration.ofSeconds(180);
+    private Duration responseTimeout = null;
 
     /**
      * 读超时
