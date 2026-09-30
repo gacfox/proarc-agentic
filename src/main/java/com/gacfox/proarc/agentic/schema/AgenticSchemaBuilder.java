@@ -5,6 +5,7 @@ import com.gacfox.proarc.agentic.model.openai.Parameters;
 import com.gacfox.proarc.agentic.model.openai.Property;
 import com.gacfox.proarc.agentic.model.openai.Tool;
 import com.gacfox.proarc.agentic.tool.AgenticToolParam;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.util.StringUtils;
 
 import java.lang.reflect.Field;
@@ -27,6 +28,7 @@ import java.util.UUID;
 /**
  * Agentic工具和结构化输出共用的JSON Schema构建器。
  */
+@Slf4j
 public class AgenticSchemaBuilder {
 
     /**
@@ -64,19 +66,23 @@ public class AgenticSchemaBuilder {
             throw new IllegalArgumentException("Root schema type must be a DTO: " + dtoType.getName());
         }
 
-        Property root = buildObjectProperty(dtoType, null);
+        Property root = buildObjectProperty(dtoType, null, new ArrayList<>());
         return Parameters.builder()
                 .properties(root.getProperties())
                 .required(root.getRequired())
                 .build();
     }
 
-    private Property buildProperty(Type type, AgenticToolParam annotation) {
+    private Property buildProperty(Type type, String description, int maxDepth, List<Class<?>> path) {
         if (type instanceof GenericArrayType genericArrayType) {
+            Property items = buildProperty(genericArrayType.getGenericComponentType(), null, maxDepth, path);
+            if (items == null) {
+                return null;
+            }
             return Property.builder()
                     .type("array")
-                    .description(annotation != null ? annotation.description() : null)
-                    .items(buildProperty(genericArrayType.getGenericComponentType(), null))
+                    .description(description)
+                    .items(items)
                     .build();
         }
 
@@ -89,62 +95,109 @@ public class AgenticSchemaBuilder {
         if (scalarType != null) {
             return Property.builder()
                     .type(scalarType)
-                    .description(annotation != null ? annotation.description() : null)
+                    .description(description)
                     .build();
         }
         if (rawType.isArray()) {
+            Property items = buildProperty(rawType.getComponentType(), null, maxDepth, path);
+            if (items == null) {
+                return null;
+            }
             return Property.builder()
                     .type("array")
-                    .description(annotation != null ? annotation.description() : null)
-                    .items(buildProperty(rawType.getComponentType(), null))
+                    .description(description)
+                    .items(items)
                     .build();
         }
         if (Collection.class.isAssignableFrom(rawType)) {
             Type itemType = resolveCollectionItemType(type);
+            Property items = buildProperty(itemType, null, maxDepth, path);
+            if (items == null) {
+                return null;
+            }
             return Property.builder()
                     .type("array")
-                    .description(annotation != null ? annotation.description() : null)
-                    .items(buildProperty(itemType, null))
+                    .description(description)
+                    .items(items)
                     .build();
         }
         if (Map.class.isAssignableFrom(rawType)) {
             throw new IllegalArgumentException("Map type is not supported in agentic schema: " + type.getTypeName());
         }
         if (isDtoType(rawType)) {
-            return buildObjectProperty(rawType, annotation);
+            int limit = Math.max(maxDepth, 1);
+            if (countOnPath(path, rawType) >= limit) {
+                if (limit > 1) {
+                    log.warn("Max depth {} reached for recursive DTO type, field omitted from schema: {}",
+                            limit, describePath(path, rawType));
+                    return null;
+                }
+                throw new IllegalArgumentException("Circular DTO reference detected in agentic schema: "
+                        + describePath(path, rawType)
+                        + ". Declare @AgenticToolParam(maxDepth = N) on the recursive field to allow bounded nesting.");
+            }
+            return buildObjectProperty(rawType, description, path);
         }
         throw new IllegalArgumentException("Unsupported schema type: " + type.getTypeName());
     }
 
-    private Property buildObjectProperty(Class<?> dtoType, AgenticToolParam annotation) {
-        Map<String, Property> properties = new LinkedHashMap<>();
-        List<String> required = new ArrayList<>();
-
-        for (Field field : dtoType.getDeclaredFields()) {
-            if (shouldSkip(field)) {
-                continue;
-            }
-            AgenticToolParam fieldAnnotation = field.getAnnotation(AgenticToolParam.class);
-            if (fieldAnnotation == null) {
-                throw new IllegalArgumentException("DTO field must be annotated with @AgenticToolParam: "
-                        + dtoType.getName() + "." + field.getName());
-            }
-            if (!StringUtils.hasText(fieldAnnotation.name())) {
-                throw new IllegalArgumentException("@AgenticToolParam name must not be blank: "
-                        + dtoType.getName() + "." + field.getName());
-            }
-            properties.put(fieldAnnotation.name(), buildProperty(field.getGenericType(), fieldAnnotation));
-            if (fieldAnnotation.required()) {
-                required.add(fieldAnnotation.name());
+    private static int countOnPath(List<Class<?>> path, Class<?> type) {
+        int count = 0;
+        for (Class<?> pathType : path) {
+            if (pathType == type) {
+                count++;
             }
         }
+        return count;
+    }
 
-        return Property.builder()
-                .type("object")
-                .description(annotation != null ? annotation.description() : null)
-                .properties(properties)
-                .required(required)
-                .build();
+    private static String describePath(List<Class<?>> path, Class<?> next) {
+        StringBuilder sb = new StringBuilder();
+        for (Class<?> pathType : path) {
+            sb.append(pathType.getSimpleName()).append(" -> ");
+        }
+        return sb.append(next.getSimpleName()).toString();
+    }
+
+    private Property buildObjectProperty(Class<?> dtoType, String description, List<Class<?>> path) {
+        path.add(dtoType);
+        try {
+            Map<String, Property> properties = new LinkedHashMap<>();
+            List<String> required = new ArrayList<>();
+
+            for (Field field : dtoType.getDeclaredFields()) {
+                if (shouldSkip(field)) {
+                    continue;
+                }
+                AgenticToolParam fieldAnnotation = field.getAnnotation(AgenticToolParam.class);
+                if (fieldAnnotation == null) {
+                    throw new IllegalArgumentException("DTO field must be annotated with @AgenticToolParam: "
+                            + dtoType.getName() + "." + field.getName());
+                }
+                if (!StringUtils.hasText(fieldAnnotation.name())) {
+                    throw new IllegalArgumentException("@AgenticToolParam name must not be blank: "
+                            + dtoType.getName() + "." + field.getName());
+                }
+                Property property = buildProperty(field.getGenericType(), fieldAnnotation.description(),
+                        fieldAnnotation.maxDepth(), path);
+                if (property == null) {
+                    continue;
+                }
+                properties.put(fieldAnnotation.name(), property);
+                if (fieldAnnotation.required()) {
+                    required.add(fieldAnnotation.name());
+                }
+            }
+
+            return Property.builder()
+                    .type("object")
+                    .description(description)
+                    .properties(properties)
+                    .required(required)
+                    .build();
+        } finally {
+            path.removeLast();
+        }
     }
 
     private boolean shouldSkip(Field field) {

@@ -126,6 +126,25 @@ JSON Schema 由 `AgenticSchemaBuilder` 根据参数 DTO 的字段类型反射生
 - DTO 中的每个非 static、非 transient 字段都必须标注 `@AgenticToolParam`，否则启动时报错，这个约束是有意为之，保证暴露给模型的每个参数都有明确的名称和描述
 - `static`、`transient` 和合成字段会被自动跳过
 
+### 循环引用与有限嵌套
+
+DTO 不允许无限循环引用（如 `A → B → A`，或 `Node` 持有 `List<Node>`），注册期会抛出携带完整引用链的 `IllegalArgumentException`，应用启动即失败，问题尽早暴露。
+
+如果业务确实需要**有限深度**的递归结构（典型如最多 3 级的菜单树），可以在递归字段上通过 `maxDepth` 显式声明展开层数：
+
+```java
+@Data
+public class Menu {
+    @AgenticToolParam(name = "name", description = "菜单名")
+    private String name;
+
+    @AgenticToolParam(name = "children", description = "子菜单，最多3层", required = false, maxDepth = 3)
+    private List<Menu> children;
+}
+```
+
+`maxDepth` 统计的是该类型在嵌套路径上允许出现的总次数（根对象算第 1 次），上例中 schema 会展开出根 + 两级子菜单。达到上限后，最深一层的递归字段在 schema 中被省略（启动时输出 WARN 日志），模型看到的第 3 层菜单没有 `children` 参数，因此无法生成第 4 层——层级约束在协议层天然生效，不需要工具方法内部再做校验。
+
 ## 工具的执行
 
 模型发起工具调用时，`ReActAgentExecutor` 会从注册中心找到对应的 `ToolDefinition`，将模型生成的 JSON 参数反序列化为 DTO 对象，再通过反射调用工具方法。工具抛出的任何异常都会被捕获并转换为 `"Error: <异常信息>"` 形式的工具结果返回给模型，而不是中断智能体循环，模型看到这个结果后通常会修正参数重新调用，这正是我们期望的自愈行为。

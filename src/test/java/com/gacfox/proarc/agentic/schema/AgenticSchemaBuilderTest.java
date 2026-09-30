@@ -87,6 +87,46 @@ class AgenticSchemaBuilderTest {
         private String x;
     }
 
+    @Data
+    static class SelfRefNode {
+        @AgenticToolParam(name = "next", description = "下一个节点", required = false)
+        private SelfRefNode next;
+    }
+
+    @Data
+    static class MutualA {
+        @AgenticToolParam(name = "b", description = "B对象", required = false)
+        private MutualB b;
+    }
+
+    @Data
+    static class MutualB {
+        @AgenticToolParam(name = "a", description = "A对象", required = false)
+        private MutualA a;
+    }
+
+    @Data
+    static class TreeNode {
+        @AgenticToolParam(name = "children", description = "子节点", required = false)
+        private List<TreeNode> children;
+    }
+
+    @Data
+    static class SiblingReuse {
+        @AgenticToolParam(name = "first", description = "第一个")
+        private Inner first;
+        @AgenticToolParam(name = "second", description = "第二个")
+        private Inner second;
+    }
+
+    @Data
+    static class Menu {
+        @AgenticToolParam(name = "name", description = "菜单名")
+        private String name;
+        @AgenticToolParam(name = "children", description = "子菜单，最多3层", required = false, maxDepth = 3)
+        private List<Menu> children;
+    }
+
     @Test
     void mapsScalarTypes() {
         Parameters params = builder.buildParameters(ScalarDto.class);
@@ -188,5 +228,56 @@ class AgenticSchemaBuilderTest {
         assertThat(tool.getFunction().getName()).isEqualTo("query_weather");
         assertThat(tool.getFunction().getDescription()).isEqualTo("查询天气");
         assertThat(tool.getFunction().getParameters().getProperties()).containsKey("x");
+    }
+
+    @Test
+    void directSelfReferenceThrows() {
+        assertThatThrownBy(() -> builder.buildParameters(SelfRefNode.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Circular DTO reference")
+                .hasMessageContaining("SelfRefNode -> SelfRefNode")
+                .hasMessageContaining("maxDepth");
+    }
+
+    @Test
+    void mutualReferenceThrowsWithFullChain() {
+        assertThatThrownBy(() -> builder.buildParameters(MutualA.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("MutualA -> MutualB -> MutualA");
+    }
+
+    @Test
+    void selfReferenceThroughCollectionThrows() {
+        assertThatThrownBy(() -> builder.buildParameters(TreeNode.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Circular DTO reference");
+    }
+
+    @Test
+    void siblingReuseOfSameTypeIsAllowed() {
+        Parameters params = builder.buildParameters(SiblingReuse.class);
+
+        assertThat(params.getProperties()).containsOnlyKeys("first", "second");
+        assertThat(params.getProperties().get("first").getProperties()).containsKey("x");
+        assertThat(params.getProperties().get("second").getProperties()).containsKey("x");
+    }
+
+    @Test
+    void boundedRecursionExpandsToMaxDepthThenOmitsField() {
+        Parameters params = builder.buildParameters(Menu.class);
+
+        // 根Menu为第1层，maxDepth=3允许Menu在路径上出现3次
+        Property level1 = params.getProperties().get("children");
+        assertThat(level1.getType()).isEqualTo("array");
+        assertThat(level1.getItems().getType()).isEqualTo("object");
+        assertThat(level1.getItems().getProperties()).containsOnlyKeys("name", "children");
+
+        Property level2 = level1.getItems().getProperties().get("children");
+        assertThat(level2).isNotNull();
+
+        // 第3层Menu不再包含children字段，模型无法生成第4层
+        Property deepestMenu = level2.getItems();
+        assertThat(deepestMenu.getProperties()).containsOnlyKeys("name");
+        assertThat(deepestMenu.getRequired()).containsExactly("name");
     }
 }
