@@ -18,6 +18,7 @@
 - [工具定义与注册](tool.md)
 - [ReAct 智能体](agent.md)
 - [智能体拦截器](agent-interceptor.md)
+- [工具调用拦截器](tool-call-interceptor.md)
 - [结构化输出](structured-output.md)
 - [提示词模板](prompt-template.md)
 

@@ -79,40 +79,37 @@ public class BudgetGuardInterceptor implements AgentInterceptor {
 
 由于拦截器在 `chain.next` 之前返回，本轮不会真正发起 LLM 请求，成本就被控制住了。
 
-## 挂起执行与 human-in-the-loop
+## 挂起执行
 
-`suspendWith` 是专门为「人在回路」场景设计的。拦截器返回挂起结果后，执行器停止循环并关闭事件流，但 `AgentContext` 中的消息历史是完整的，我们可以在外部（例如等待人工审批通过后）用同一个上下文再次调用 `execute` 继续执行。
+`suspendWith` 用于在循环边界主动中止本次执行：拦截器返回挂起结果后，执行器停止循环并关闭事件流，但 `AgentContext` 中的消息历史保持完整且协议合法，之后可以用同一个上下文再次调用 `execute` 继续执行。
 
 ```java
-public class HumanApprovalInterceptor implements AgentInterceptor {
-    private final ApprovalService approvalService;
+public class QuotaInterceptor implements AgentInterceptor {
+    private final QuotaService quotaService;
 
     @Override
     public AgentLoopResult intercept(AgentContext context, AgentInterceptorChain chain) {
-        AgentLoopResult result = chain.next(context);
-        boolean needsApproval = result.getResponses().stream()
-                .anyMatch(r -> r.getType() == AgentResponse.Type.TOOL_CALL
-                        && "delete_order".equals(r.getToolName()));
-        if (needsApproval) {
-            approvalService.submit(context.getContextId()); // 提交人工审批
-            return AgentLoopResult.suspendWith(result.getResponses());
+        if (quotaService.exhausted(context.getContextId())) {
+            quotaService.notifyRefill(context.getContextId()); // 通知配额管理员充值
+            return AgentLoopResult.suspendWith(List.of(
+                    AgentResponse.suspended("Token quota exhausted, waiting for refill.")));
         }
-        return result;
+        return chain.next(context);
     }
 }
 ```
 
-这个例子的思路是：本轮正常执行，如果发现模型试图调用高危工具，则把执行挂起并提交人工审批。审批通过后，业务方使用保存的 `AgentContext` 再次调用 `execute`，智能体带着完整的消息历史继续工作。
+这个例子的思路是：每轮循环开始前检查配额，耗尽时挂起执行并通知管理员。由于拦截发生在 `chain.next` 之前，本轮不会真正发起 LLM 请求。配额充值后，业务方用保存的 `AgentContext` 再次调用 `execute`，智能体带着完整的消息历史从下一轮循环继续工作。
 
-需要注意的是，上面的示例在工具调用发出之后才拦截，工具实际已经执行了。如果需要在工具执行前就介入，更稳妥的做法是把高危操作拆成两个工具：第一个工具只生成待审批的操作单，审批通过后由第二个工具真正执行，拦截器只负责在循环间挂起。
+如果挂起的原因是「某次工具调用需要人工审批」，循环粒度就不合适了——循环拦截器看到 tool_calls 时工具往往已经执行。这种场景应该使用[工具调用拦截器](tool-call-interceptor.md)：它在单次工具调用粒度环绕拦截，配合 `AgentSuspendException` 可以在执行前挂起，并在审批通过后从未执行的那次调用精确恢复。
 
-## 两层拦截器的分工
+## 三层拦截器的分工
 
-最后用一张表总结两层拦截器的分工，实际使用中我们可以据此决定逻辑挂在哪里。
+最后用一张表总结三层拦截器的分工，实际使用中我们可以据此决定逻辑挂在哪里。
 
-| 维度 | `LlmInterceptor` | `AgentInterceptor` |
-|---|---|---|
-| 拦截粒度 | 单次 LLM 请求 | 一整轮 ReAct 循环 |
-| 触发频率 | 每次请求一次 | 每轮循环一次 |
-| 能感知 | 请求参数、模型配置、响应 | 上下文、消息历史、事件列表、循环结局 |
-| 典型用途 | 重试、限流、审计请求、动态 Header | 循环审计、预算守卫、人工介入 |
+| 维度 | `LlmInterceptor` | `AgentInterceptor` | `ToolCallInterceptor` |
+|---|---|---|---|
+| 拦截粒度 | 单次 LLM 请求 | 一整轮 ReAct 循环 | 单次工具调用 |
+| 触发频率 | 每次请求一次 | 每轮循环一次 | 每次工具执行一次 |
+| 能感知 | 请求参数、模型配置、响应 | 上下文、消息历史、事件列表、循环结局 | 工具名、参数、上下文 |
+| 典型用途 | 重试、限流、审计请求、动态 Header | 循环审计、预算守卫、轮次间人工介入 | 工具审计、参数改写、调用审批、挂起恢复 |

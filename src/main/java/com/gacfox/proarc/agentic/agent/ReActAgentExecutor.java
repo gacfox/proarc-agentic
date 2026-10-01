@@ -2,6 +2,8 @@ package com.gacfox.proarc.agentic.agent;
 
 import com.gacfox.proarc.agentic.agent.interceptor.AgentInterceptor;
 import com.gacfox.proarc.agentic.agent.interceptor.AgentInterceptorChain;
+import com.gacfox.proarc.agentic.agent.interceptor.ToolCallChain;
+import com.gacfox.proarc.agentic.agent.interceptor.ToolCallInterceptor;
 import com.gacfox.proarc.agentic.client.LlmClient;
 import com.gacfox.proarc.agentic.model.ChatRequest;
 import com.gacfox.proarc.agentic.model.openai.*;
@@ -16,6 +18,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
+import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -32,6 +35,7 @@ public class ReActAgentExecutor {
     private final ToolRegistry toolRegistry;
     private final List<String> defaultToolNames;
     private final List<AgentInterceptor> interceptors;
+    private final List<ToolCallInterceptor> toolCallInterceptors;
     @Builder.Default
     private final int maxIterations = 50;
 
@@ -58,6 +62,11 @@ public class ReActAgentExecutor {
                 .stream()
                 .sorted(Comparator.comparingInt(AgentInterceptor::getOrder))
                 .toList();
+        List<ToolCallInterceptor> sortedToolCallInterceptors = Optional.ofNullable(toolCallInterceptors)
+                .orElseGet(Collections::emptyList)
+                .stream()
+                .sorted(Comparator.comparingInt(ToolCallInterceptor::getOrder))
+                .toList();
 
         for (int i = 0; i < this.maxIterations; i++) {
             if (cancelled.get() || context.isStopRequested()) {
@@ -74,7 +83,7 @@ public class ReActAgentExecutor {
                         AgentInterceptor interceptor = sortedInterceptors.get(index++);
                         return interceptor.intercept(context, this);
                     }
-                    return executeLoop(context, sink, cancelled);
+                    return executeLoop(context, sink, cancelled, sortedToolCallInterceptors);
                 }
             };
 
@@ -87,7 +96,8 @@ public class ReActAgentExecutor {
         emitSignal(sink, AgentResponse.error("Agent reached maximum iterations"));
     }
 
-    private AgentLoopResult executeLoop(AgentContext context, Sinks.Many<AgentResponse> sink, AtomicBoolean cancelled) {
+    private AgentLoopResult executeLoop(AgentContext context, Sinks.Many<AgentResponse> sink,
+                                        AtomicBoolean cancelled, List<ToolCallInterceptor> sortedToolCallInterceptors) {
         LlmClient llmClient = context.getLlmClient() != null ? context.getLlmClient() : defaultLlmClient;
         List<String> toolNames = context.getToolNames() != null && !context.getToolNames().isEmpty()
                 ? context.getToolNames() : defaultToolNames;
@@ -100,6 +110,26 @@ public class ReActAgentExecutor {
         }
 
         List<AgentResponse> responses = new ArrayList<>();
+
+        List<ToolCall> pending = findPendingToolCalls(context.getMessages());
+        if (!pending.isEmpty()) {
+            log.debug("Resuming {} pending tool call(s), contextId={}", pending.size(), context.getContextId());
+            String drainFinalMessage;
+            try {
+                drainFinalMessage = processToolCalls(pending, context, sink, cancelled, toolMap, responses,
+                        sortedToolCallInterceptors);
+            } catch (AgentSuspendException e) {
+                emit(sink, responses, AgentResponse.suspended(e.getMessage()));
+                return AgentLoopResult.suspendWith(responses);
+            }
+            if (drainFinalMessage != null) {
+                return AgentLoopResult.finishWith(responses);
+            }
+            if (cancelled.get() || context.isStopRequested()) {
+                return AgentLoopResult.continueWith(responses);
+            }
+        }
+
         ChatRequest chatRequest = ChatRequest.builder()
                 .messages(context.getMessages())
                 .temperature(context.getTemperature())
@@ -148,6 +178,28 @@ public class ReActAgentExecutor {
         }
 
         List<ToolCall> toolCalls = response.extractBlockingToolCalls();
+        String finalMessage;
+        try {
+            finalMessage = processToolCalls(toolCalls, context, sink, cancelled, toolMap, responses,
+                    sortedToolCallInterceptors);
+        } catch (AgentSuspendException e) {
+            emit(sink, responses, AgentResponse.suspended(e.getMessage()));
+            return AgentLoopResult.suspendWith(responses);
+        }
+        return finalMessage != null
+                ? AgentLoopResult.finishWith(responses)
+                : AgentLoopResult.continueWith(responses);
+    }
+
+    /**
+     * 顺序执行一批工具调用，每次调用经过工具调用拦截器链，返回最终回答（无则返回null）
+     * <p>
+     * 拦截器链返回的字符串即工具结果；拦截器或工具抛出异常时异常信息作为错误结果返回给模型；
+     * 抛出{@link AgentSuspendException}时直接上抛，当前及剩余tool_calls保持待执行状态
+     */
+    private String processToolCalls(List<ToolCall> toolCalls, AgentContext context, Sinks.Many<AgentResponse> sink,
+                                    AtomicBoolean cancelled, Map<String, ToolDefinition> toolMap,
+                                    List<AgentResponse> responses, List<ToolCallInterceptor> sortedToolCallInterceptors) {
         String finalMessage = null;
         for (ToolCall toolCall : toolCalls) {
             ToolCallFunction fn = toolCall.getFunction();
@@ -170,29 +222,93 @@ public class ReActAgentExecutor {
                 continue;
             }
 
-            if (FINAL_ANSWER_TOOL.equals(toolName)) {
-                finalMessage = extractFinalAnswer(arguments);
-                emit(sink, responses, AgentResponse.finalAnswer(finalMessage));
-                context.getMessages().add(toolResultMessage(toolCall.getId(), "Final answer submitted."));
-                continue;
+            boolean isFinalAnswer = FINAL_ANSWER_TOOL.equals(toolName);
+            if (!isFinalAnswer) {
+                if (!StringUtils.hasText(arguments)) {
+                    arguments = "{}";
+                    fn.setArguments("{}");
+                } else if (!isValidJson(arguments)) {
+                    fn.setArguments("{}");
+                    String invalidNote = "Error: tool arguments are not valid JSON (possibly truncated): " + arguments;
+                    emit(sink, responses, AgentResponse.toolResult(toolCall.getId(), toolName, invalidNote));
+                    context.getMessages().add(toolResultMessage(toolCall.getId(), invalidNote));
+                    continue;
+                }
             }
 
+            ToolInvocation invocation = ToolInvocation.builder()
+                    .toolCallId(toolCall.getId())
+                    .toolName(toolName)
+                    .arguments(arguments)
+                    .agentContext(context)
+                    .build();
             String result;
-            if (!StringUtils.hasText(arguments)) {
-                fn.setArguments("{}");
-                result = invokeTool(toolMap, toolName, "{}", context);
-            } else if (isValidJson(arguments)) {
-                result = invokeTool(toolMap, toolName, arguments, context);
-            } else {
-                fn.setArguments("{}");
-                result = "Error: tool arguments are not valid JSON (possibly truncated): " + arguments;
+            try {
+                result = newToolCallChain(sortedToolCallInterceptors, toolMap).proceed(invocation);
+            } catch (AgentSuspendException e) {
+                throw e;
+            } catch (Exception e) {
+                log.error("Tool invocation error: {}", toolName, e);
+                result = "Error: " + e.getMessage();
             }
-            emit(sink, responses, AgentResponse.toolResult(toolCall.getId(), toolName, result));
-            context.getMessages().add(toolResultMessage(toolCall.getId(), result));
+
+            if (isFinalAnswer) {
+                finalMessage = result;
+                emit(sink, responses, AgentResponse.finalAnswer(finalMessage));
+                context.getMessages().add(toolResultMessage(toolCall.getId(), "Final answer submitted."));
+            } else {
+                emit(sink, responses, AgentResponse.toolResult(toolCall.getId(), toolName, result));
+                context.getMessages().add(toolResultMessage(toolCall.getId(), result));
+            }
         }
-        return finalMessage != null
-                ? AgentLoopResult.finishWith(responses)
-                : AgentLoopResult.continueWith(responses);
+        return finalMessage;
+    }
+
+    private ToolCallChain newToolCallChain(List<ToolCallInterceptor> sortedToolCallInterceptors,
+                                           Map<String, ToolDefinition> toolMap) {
+        return new ToolCallChain() {
+            int index = 0;
+
+            @Override
+            public String proceed(ToolInvocation invocation) throws Exception {
+                if (index < sortedToolCallInterceptors.size()) {
+                    return sortedToolCallInterceptors.get(index++).intercept(invocation, this);
+                }
+                if (FINAL_ANSWER_TOOL.equals(invocation.getToolName())) {
+                    return extractFinalAnswer(invocation.getArguments());
+                }
+                return invokeTool(toolMap, invocation.getToolName(), invocation.getArguments(),
+                        invocation.getAgentContext());
+            }
+        };
+    }
+
+    /**
+     * 查找消息历史末尾未配对工具结果的tool_calls（挂起恢复场景）：
+     * 仅当最后一条带tool_calls的assistant消息之后只有tool消息时返回其中未执行的调用，否则返回空列表
+     */
+    private List<ToolCall> findPendingToolCalls(List<Message> messages) {
+        int i = messages.size() - 1;
+        Set<String> answered = new HashSet<>();
+        while (i >= 0 && Message.ROLE_TOOL.equals(messages.get(i).getRole())) {
+            answered.add(messages.get(i).getToolCallId());
+            i--;
+        }
+        if (i < 0) {
+            return List.of();
+        }
+        Message last = messages.get(i);
+        if (!Message.ROLE_ASSISTANT.equals(last.getRole())
+                || last.getToolCalls() == null || last.getToolCalls().isEmpty()) {
+            return List.of();
+        }
+        List<ToolCall> pending = new ArrayList<>();
+        for (ToolCall toolCall : last.getToolCalls()) {
+            if (!answered.contains(toolCall.getId())) {
+                pending.add(toolCall);
+            }
+        }
+        return pending;
     }
 
     private ModelResponse streamingChat(LlmClient llmClient, ChatRequest chatRequest, Sinks.Many<AgentResponse> sink,
@@ -471,6 +587,11 @@ public class ReActAgentExecutor {
             agentContext.getVariables().putAll(snapshot.getVariables());
             return result;
         } catch (Exception e) {
+            Throwable cause = e instanceof InvocationTargetException ite && ite.getCause() != null
+                    ? ite.getCause() : e;
+            if (cause instanceof AgentSuspendException suspendException) {
+                throw suspendException;
+            }
             log.error("Tool invocation error: {}", toolName, e);
             return "Error: " + e.getMessage();
         }

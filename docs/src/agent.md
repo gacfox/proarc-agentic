@@ -87,6 +87,7 @@ public String queryOrder(OrderQuery query, AgentContext ctx) {
 | `THINKING_DELTA` | 思考内容增量片段 | 仅 `streaming=true` 时，随流式分片实时产生 |
 | `FINAL_ANSWER_DELTA` | 最终回答增量片段 | 仅 `streaming=true` 时，随流式分片实时产生 |
 | `STOPPED` | 执行被停止 | `requestStop()` 请求停止生效时，发出后事件流正常完成 |
+| `SUSPENDED` | 执行被挂起 | 工具调用拦截器或工具抛出 `AgentSuspendException` 时，发出后事件流正常完成，可持久化上下文后再次 `execute` 恢复 |
 
 前端对接时，一般按事件类型分别渲染：思考内容放到折叠区域，工具调用展示为执行步骤，`FINAL_ANSWER`（或其 delta 流）渲染为正式回答。
 

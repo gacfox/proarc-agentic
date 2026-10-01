@@ -9,6 +9,7 @@ ProArc Agentic 是一个基于 Spring Boot 的大语言模型（LLM）智能体�
 - 异常体系：统一的 LLM 异常模型，区分 Provider 错误与本地错误，并标注是否可重试
 - 工具注册：通过 `@AgenticTool` 注解声明工具，自动扫描注册并生成 JSON Schema
 - ReAct 智能体：`ReActAgentExecutor` 驱动「思考—行动—观察」循环，以事件流形式输出执行过程，支持流式增量输出与循环拦截器
+- 工具调用拦截：环绕式 `ToolCallInterceptor` 链在工具真正执行前介入，支持参数改写、结果替换、调用拒绝，配合 `AgentSuspendException` 可实现挂起-恢复式的 human-in-the-loop
 - 结构化输出：基于强制工具调用实现，直接返回反序列化后的 Java 对象
 - 提示词模板：内置 Mustache 模板工具
 

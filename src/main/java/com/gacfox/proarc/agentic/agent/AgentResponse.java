@@ -50,7 +50,11 @@ public class AgentResponse implements Serializable {
         /**
          * 智能体执行被外部请求停止
          */
-        STOPPED
+        STOPPED,
+        /**
+         * 智能体执行被挂起（例如等待外部审批），可持久化上下文后再次execute恢复
+         */
+        SUSPENDED
     }
 
     /**
@@ -158,5 +162,15 @@ public class AgentResponse implements Serializable {
      */
     public static AgentResponse stopped(String content) {
         return AgentResponse.builder().type(Type.STOPPED).content(content).build();
+    }
+
+    /**
+     * 生成智能体被挂起事件
+     *
+     * @param content 挂起说明
+     * @return 事件对象
+     */
+    public static AgentResponse suspended(String content) {
+        return AgentResponse.builder().type(Type.SUSPENDED).content(content).build();
     }
 }
