@@ -376,7 +376,7 @@ public class ReActAgentExecutor {
                         if (fn == null) {
                             continue;
                         }
-                        if (fn.getName() != null) {
+                        if (StringUtils.hasText(fn.getName())) {
                             toolNames.put(index, fn.getName());
                         }
                         if (FINAL_ANSWER_TOOL.equals(toolNames.get(index)) && fn.getArguments() != null) {

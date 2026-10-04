@@ -6,6 +6,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.util.StringUtils;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -108,7 +109,8 @@ public class ModelResponse implements Serializable {
 
     /**
      * 将流式响应chunk聚合为完整响应：content/reasoning按序拼接，tool_calls按index聚合，
-     * usage与finishReason取最后一个非空值
+     * usage与finishReason取最后一个非空值；部分provider会以空字符串代替省略字段，
+     * tool_call的id/type/name空字符串视为缺失，避免覆盖前序chunk中已聚合的值
      *
      * @param chunks 流式响应chunk列表
      * @return 聚合后的完整响应
@@ -161,14 +163,14 @@ public class ModelResponse implements Serializable {
                         for (ToolCall tc : delta.getToolCalls()) {
                             int tcIdx = resolveToolCallIndex(tc, tcMap);
                             ToolCallBuilder tcb = tcMap.computeIfAbsent(tcIdx, k -> new ToolCallBuilder());
-                            if (tc.getId() != null) {
+                            if (StringUtils.hasText(tc.getId())) {
                                 tcb.id = tc.getId();
                             }
-                            if (tc.getType() != null) {
+                            if (StringUtils.hasText(tc.getType())) {
                                 tcb.type = tc.getType();
                             }
                             if (tc.getFunction() != null) {
-                                if (tc.getFunction().getName() != null) {
+                                if (StringUtils.hasText(tc.getFunction().getName())) {
                                     tcb.functionName = tc.getFunction().getName();
                                 }
                                 if (tc.getFunction().getArguments() != null) {
@@ -242,8 +244,8 @@ public class ModelResponse implements Serializable {
             return tc.getIndex();
         }
         TreeMap<Integer, ToolCallBuilder> sorted = (TreeMap<Integer, ToolCallBuilder>) tcMap;
-        boolean startsNewCall = tc.getId() != null
-                || (tc.getFunction() != null && tc.getFunction().getName() != null);
+        boolean startsNewCall = StringUtils.hasText(tc.getId())
+                || (tc.getFunction() != null && StringUtils.hasText(tc.getFunction().getName()));
         if (sorted.isEmpty()) {
             return 0;
         }

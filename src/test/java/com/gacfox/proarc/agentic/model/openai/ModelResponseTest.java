@@ -111,6 +111,35 @@ class ModelResponseTest {
     }
 
     @Test
+    void keepsIdAndNameWhenLaterChunksReturnEmptyStrings() {
+        ModelResponse merged = ModelResponse.mergeStreamChunks(List.of(
+                chunk("assistant", null, null, List.of(toolCallPart("t1", 0, "query_weather", "")), null, null),
+                chunk(null, null, null, List.of(toolCallPart("", 0, "", "{\"ci")), null, null),
+                chunk(null, null, null, List.of(toolCallPart("", 0, "", "ty\":\"北京\"}")), "tool_calls", null)
+        ));
+
+        List<ToolCall> toolCalls = merged.extractBlockingToolCalls();
+        assertThat(toolCalls).hasSize(1);
+        assertThat(toolCalls.getFirst().getId()).isEqualTo("t1");
+        assertThat(toolCalls.getFirst().getFunction().getName()).isEqualTo("query_weather");
+        assertThat(toolCalls.getFirst().getFunction().getArguments()).isEqualTo("{\"city\":\"北京\"}");
+    }
+
+    @Test
+    void emptyStringIdAndNameDoNotStartNewToolCallWhenIndexMissing() {
+        ModelResponse merged = ModelResponse.mergeStreamChunks(List.of(
+                chunk("assistant", null, null, List.of(toolCallPart("t1", null, "query_weather", "{\"ci")), null, null),
+                chunk(null, null, null, List.of(toolCallPart("", null, "", "ty\":\"北京\"}")), "tool_calls", null)
+        ));
+
+        List<ToolCall> toolCalls = merged.extractBlockingToolCalls();
+        assertThat(toolCalls).hasSize(1);
+        assertThat(toolCalls.getFirst().getId()).isEqualTo("t1");
+        assertThat(toolCalls.getFirst().getFunction().getName()).isEqualTo("query_weather");
+        assertThat(toolCalls.getFirst().getFunction().getArguments()).isEqualTo("{\"city\":\"北京\"}");
+    }
+
+    @Test
     void separatesToolCallsWhenIndexMissingButNewCallStarts() {
         ModelResponse merged = ModelResponse.mergeStreamChunks(List.of(
                 chunk("assistant", null, null, List.of(toolCallPart(null, null, "tool_a", "{\"a\":")), null, null),
