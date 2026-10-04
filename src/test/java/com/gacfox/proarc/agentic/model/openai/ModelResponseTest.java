@@ -26,7 +26,7 @@ class ModelResponseTest {
                 .build();
     }
 
-    private static ToolCall toolCallPart(String id, int index, String name, String arguments) {
+    private static ToolCall toolCallPart(String id, Integer index, String name, String arguments) {
         return ToolCall.builder()
                 .id(id)
                 .index(index)
@@ -93,6 +93,69 @@ class ModelResponseTest {
         assertThat(toolCalls).hasSize(2);
         assertThat(toolCalls).allSatisfy(tc -> assertThat(tc.getId()).isNotBlank());
         assertThat(toolCalls.get(0).getId()).isNotEqualTo(toolCalls.get(1).getId());
+    }
+
+    @Test
+    void aggregatesToolCallFragmentsWhenIndexMissing() {
+        ModelResponse merged = ModelResponse.mergeStreamChunks(List.of(
+                chunk("assistant", null, null, List.of(toolCallPart("t1", null, "query_weather", "{\"ci")), null, null),
+                chunk(null, null, null, List.of(toolCallPart(null, null, null, "ty\":\"北京\"}")), null, null),
+                chunk(null, null, null, List.of(toolCallPart(null, null, null, "")), "tool_calls", null)
+        ));
+
+        List<ToolCall> toolCalls = merged.extractBlockingToolCalls();
+        assertThat(toolCalls).hasSize(1);
+        assertThat(toolCalls.getFirst().getId()).isEqualTo("t1");
+        assertThat(toolCalls.getFirst().getFunction().getName()).isEqualTo("query_weather");
+        assertThat(toolCalls.getFirst().getFunction().getArguments()).isEqualTo("{\"city\":\"北京\"}");
+    }
+
+    @Test
+    void separatesToolCallsWhenIndexMissingButNewCallStarts() {
+        ModelResponse merged = ModelResponse.mergeStreamChunks(List.of(
+                chunk("assistant", null, null, List.of(toolCallPart(null, null, "tool_a", "{\"a\":")), null, null),
+                chunk(null, null, null, List.of(toolCallPart(null, null, null, "1}")), null, null),
+                chunk(null, null, null, List.of(toolCallPart(null, null, "tool_b", "{\"b\":")), null, null),
+                chunk(null, null, null, List.of(toolCallPart(null, null, null, "2}")), "tool_calls", null)
+        ));
+
+        List<ToolCall> toolCalls = merged.extractBlockingToolCalls();
+        assertThat(toolCalls).hasSize(2);
+        assertThat(toolCalls.get(0).getFunction().getName()).isEqualTo("tool_a");
+        assertThat(toolCalls.get(0).getFunction().getArguments()).isEqualTo("{\"a\":1}");
+        assertThat(toolCalls.get(1).getFunction().getName()).isEqualTo("tool_b");
+        assertThat(toolCalls.get(1).getFunction().getArguments()).isEqualTo("{\"b\":2}");
+    }
+
+    @Test
+    void placeholderIdsAreDeterministicAcrossMerges() {
+        List<ModelResponse> chunks = List.of(
+                chunk("assistant", null, null, List.of(
+                        toolCallPart(null, 0, "tool_a", "{}"),
+                        toolCallPart("", 1, "tool_b", "{}")
+                ), "tool_calls", null)
+        );
+
+        ModelResponse first = ModelResponse.mergeStreamChunks(chunks);
+        ModelResponse second = ModelResponse.mergeStreamChunks(chunks);
+
+        assertThat(first.extractBlockingToolCalls())
+                .extracting(ToolCall::getId)
+                .containsExactlyElementsOf(second.extractBlockingToolCalls().stream()
+                        .map(ToolCall::getId)
+                        .toList());
+    }
+
+    @Test
+    void keepsChoiceWithFinishReasonOnly() {
+        ModelResponse merged = ModelResponse.mergeStreamChunks(List.of(
+                chunk("assistant", "部分回复", null, null, null, null),
+                chunk(null, null, null, null, "content_filter", null)
+        ));
+
+        assertThat(merged.getChoices()).hasSize(1);
+        assertThat(merged.extractBlockingContent()).isEqualTo("部分回复");
+        assertThat(merged.extractBlockingFinishReason()).isEqualTo("content_filter");
     }
 
     @Test

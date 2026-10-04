@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.UUID;
 
 /**
  * 标准（OpenAI规范）大模型响应
@@ -160,7 +159,7 @@ public class ModelResponse implements Serializable {
                     if (delta.getToolCalls() != null) {
                         Map<Integer, ToolCallBuilder> tcMap = toolCallsMap.computeIfAbsent(choiceIdx, k -> new TreeMap<>());
                         for (ToolCall tc : delta.getToolCalls()) {
-                            int tcIdx = tc.getIndex() != null ? tc.getIndex() : tcMap.size();
+                            int tcIdx = resolveToolCallIndex(tc, tcMap);
                             ToolCallBuilder tcb = tcMap.computeIfAbsent(tcIdx, k -> new ToolCallBuilder());
                             if (tc.getId() != null) {
                                 tcb.id = tc.getId();
@@ -189,6 +188,8 @@ public class ModelResponse implements Serializable {
         allChoiceIndices.addAll(contentMap.keySet());
         allChoiceIndices.addAll(reasoningMap.keySet());
         allChoiceIndices.addAll(toolCallsMap.keySet());
+        allChoiceIndices.addAll(roleMap.keySet());
+        allChoiceIndices.addAll(finishReasonMap.keySet());
 
         List<Choice> mergedChoices = new ArrayList<>();
         for (Integer choiceIdx : allChoiceIndices) {
@@ -199,7 +200,7 @@ public class ModelResponse implements Serializable {
                 for (Map.Entry<Integer, ToolCallBuilder> entry : tcMap.entrySet()) {
                     ToolCallBuilder tcb = entry.getValue();
                     mergedToolCalls.add(ToolCall.builder()
-                            .id(normalizeToolCallId(tcb.id))
+                            .id(normalizeToolCallId(tcb.id, choiceIdx, entry.getKey(), tcb.functionName))
                             .index(entry.getKey())
                             .type(tcb.type)
                             .function(ToolCallFunction.builder()
@@ -233,14 +234,32 @@ public class ModelResponse implements Serializable {
     }
 
     /**
-     * 部分OpenAI兼容端点流式返回的tool_call缺少id，空id会导致消息历史中tool_call与tool结果无法配对，
-     * 统一兜底生成占位id
+     * 确定tool_call聚合槽位：优先使用provider返回的index；index缺失时，
+     * 携带id或function name的视为新调用（追加槽位），纯arguments分片归属最近一次调用
      */
-    private static String normalizeToolCallId(String id) {
+    private static int resolveToolCallIndex(ToolCall tc, Map<Integer, ToolCallBuilder> tcMap) {
+        if (tc.getIndex() != null) {
+            return tc.getIndex();
+        }
+        TreeMap<Integer, ToolCallBuilder> sorted = (TreeMap<Integer, ToolCallBuilder>) tcMap;
+        boolean startsNewCall = tc.getId() != null
+                || (tc.getFunction() != null && tc.getFunction().getName() != null);
+        if (sorted.isEmpty()) {
+            return 0;
+        }
+        return startsNewCall ? sorted.lastKey() + 1 : sorted.lastKey();
+    }
+
+    /**
+     * 部分OpenAI兼容端点流式返回的tool_call缺少id，空id会导致消息历史中tool_call与tool结果无法配对，
+     * 统一兜底生成占位id；占位id基于choice序号、槽位序号与函数名生成，保证同一批chunk重复聚合结果一致
+     */
+    private static String normalizeToolCallId(String id, int choiceIdx, int tcIdx, String functionName) {
         if (id != null && !id.isBlank()) {
             return id;
         }
-        return "call_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        String seed = choiceIdx + ":" + tcIdx + ":" + (functionName != null ? functionName : "");
+        return "call_" + Integer.toHexString(seed.hashCode());
     }
 
     private static class ToolCallBuilder {
