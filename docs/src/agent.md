@@ -55,6 +55,7 @@ Flux<AgentResponse> events = agent.execute(AgentContext.builder()
 | `toolNames` | 本次执行启用的工具名列表，为空时使用执行器的默认工具列表 |
 | `temperature` / `topP` / `topK` / `presencePenalty` / `frequencyPenalty` / `seed` / `maxTokens` | 采样参数，语义与 `ChatRequest` 一致 |
 | `enableThinking` | 是否开启思考，前提是模型声明了 `reasoning` 能力 |
+| `reasoningEffort` | 推理强度，语义与 `ChatRequest` 一致，默认不传递该字段 |
 | `streaming` | 是否流式输出思考与最终回答内容，默认 `false` |
 | `variables` | 自定义变量 Map，供工具读写共享状态 |
 

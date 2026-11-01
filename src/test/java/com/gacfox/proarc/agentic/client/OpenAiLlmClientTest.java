@@ -6,6 +6,7 @@ import com.gacfox.proarc.agentic.exception.LlmEmptyResponseException;
 import com.gacfox.proarc.agentic.exception.LlmRateLimitException;
 import com.gacfox.proarc.agentic.exception.LlmServerException;
 import com.gacfox.proarc.agentic.model.ChatRequest;
+import com.gacfox.proarc.agentic.model.ReasoningEffort;
 import com.gacfox.proarc.agentic.model.UserMessage;
 import com.gacfox.proarc.agentic.model.openai.ModelInfo;
 import com.gacfox.proarc.agentic.model.openai.ModelResponse;
@@ -115,6 +116,42 @@ class OpenAiLlmClientTest {
         assertThat(body).contains("\"model\":\"test-model\"");
         assertThat(body).contains("\"stream\":true");
         assertThat(body).contains("你好");
+    }
+
+    @Test
+    void omitsReasoningEffortByDefault() throws Exception {
+        server.enqueue(sseResponse(sseBody(sseChunk("hi"))));
+
+        client.blockingChat(chatRequest());
+
+        String body = server.takeRequest().getBody().readUtf8();
+        assertThat(body).doesNotContain("\"reasoning_effort\"");
+    }
+
+    @Test
+    void sendsBuiltInReasoningEffort() throws Exception {
+        server.enqueue(sseResponse(sseBody(sseChunk("hi"))));
+
+        client.blockingChat(ChatRequest.builder()
+                .messages(List.of(new UserMessage("你好")))
+                .reasoningEffort(ReasoningEffort.HIGH)
+                .build());
+
+        String body = server.takeRequest().getBody().readUtf8();
+        assertThat(body).contains("\"reasoning_effort\":\"high\"");
+    }
+
+    @Test
+    void sendsCustomReasoningEffort() throws Exception {
+        server.enqueue(sseResponse(sseBody(sseChunk("hi"))));
+
+        client.blockingChat(ChatRequest.builder()
+                .messages(List.of(new UserMessage("你好")))
+                .reasoningEffort("provider-custom-effort")
+                .build());
+
+        String body = server.takeRequest().getBody().readUtf8();
+        assertThat(body).contains("\"reasoning_effort\":\"provider-custom-effort\"");
     }
 
     @Test

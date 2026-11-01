@@ -2,6 +2,7 @@ package com.gacfox.proarc.agentic.agent;
 
 import com.gacfox.proarc.agentic.client.LlmClient;
 import com.gacfox.proarc.agentic.model.ChatRequest;
+import com.gacfox.proarc.agentic.model.ReasoningEffort;
 import com.gacfox.proarc.agentic.model.UserMessage;
 import com.gacfox.proarc.agentic.model.openai.Choice;
 import com.gacfox.proarc.agentic.model.openai.Delta;
@@ -218,6 +219,20 @@ class ReActAgentExecutorTest {
         assertThat(events).extracting(AgentResponse::getType)
                 .containsExactly(AgentResponse.Type.TOOL_CALL, AgentResponse.Type.FINAL_ANSWER);
         assertThat(client.receivedRequests).hasSize(1);
+    }
+
+    @Test
+    void passesReasoningEffortToLlmRequest() {
+        FakeLlmClient client = new FakeLlmClient(finalAnswerResponse("完成"));
+        AgentContext context = AgentContext.builder()
+                .messages(new ArrayList<>(List.of(new UserMessage("你好"))))
+                .reasoningEffort(ReasoningEffort.XHIGH)
+                .build();
+
+        run(executor(client), context);
+
+        assertThat(client.receivedRequests.getFirst().getReasoningEffort()).isEqualTo("xhigh");
+        assertThat(context.snapshot().getReasoningEffort()).isEqualTo("xhigh");
     }
 
     @Test

@@ -47,6 +47,11 @@ public class ModelRequest implements Serializable {
     @JsonProperty("max_tokens")
     private Integer maxTokens;
     /**
+     * 推理强度，仅部分Provider支持；为null时不传递该字段
+     */
+    @JsonProperty("reasoning_effort")
+    private String reasoningEffort;
+    /**
      * 惩罚新出现的token，抑制模型生成重复内容，值越大越倾向于重复已有内容，值越小越容易引入新话题
      */
     @Builder.Default

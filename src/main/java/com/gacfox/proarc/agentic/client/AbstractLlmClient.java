@@ -102,6 +102,7 @@ public abstract class AbstractLlmClient implements LlmClient {
                 .frequencyPenalty(chatRequest.getFrequencyPenalty())
                 .seed(chatRequest.getSeed())
                 .maxTokens(chatRequest.getMaxTokens())
+                .reasoningEffort(chatRequest.getReasoningEffort())
                 .tools(chatRequest.getTools())
                 .toolChoice(chatRequest.getToolChoice())
                 .build();

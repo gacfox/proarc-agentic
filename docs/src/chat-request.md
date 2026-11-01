@@ -37,6 +37,7 @@ List<Message> messages = List.of(
 | `messages` | `List<Message>` | - | 消息列表，必填 |
 | `temperature` | `Double` | `0.7` | 温度 |
 | `enableThinking` | `Boolean` | `null` | 是否开启思考，详见下文 |
+| `reasoningEffort` | `String` | `null` | 推理强度，不配置时不向端点传递该字段 |
 | `topP` | `Double` | `null` | 核采样参数 |
 | `topK` | `Integer` | `null` | 前 k 个最可能 token，仅部分 Provider 支持 |
 | `presencePenalty` | `Double` | `0.0` | 惩罚新出现的 token，抑制生成重复内容 |
@@ -57,6 +58,19 @@ ChatRequest request = ChatRequest.builder()
 ```
 
 值为 `null` 的字段不会序列化进请求体，因此端点会使用自己的默认值。
+
+## 关于 reasoningEffort
+
+`reasoningEffort` 对应请求体中的 `reasoning_effort` 字段，用于指定模型的推理强度。框架在 `ReasoningEffort` 中提供 `NONE`、`MINIMAL`、`LOW`、`MEDIUM`、`HIGH`、`XHIGH`、`MAX` 七个字符串常量作为参考，但不做枚举校验，也可以直接传入 Provider 支持的其他值。该参数不受 `ModelInfo.capabilities` 限制，是否生效取决于模型与端点。
+
+```java
+ChatRequest request = ChatRequest.builder()
+        .messages(messages)
+        .reasoningEffort(ReasoningEffort.HIGH)
+        .build();
+```
+
+默认值为 `null`，此时请求体不包含 `reasoning_effort`，行为与未引入该参数时一致。
 
 ## 关于 enableThinking
 

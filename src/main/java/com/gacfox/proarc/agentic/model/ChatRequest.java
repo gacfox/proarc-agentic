@@ -35,6 +35,11 @@ public class ChatRequest implements Serializable {
     private Boolean enableThinking;
 
     /**
+     * 推理强度，可参考{@link ReasoningEffort}的内置值，也可传入Provider支持的其他字符串；为null时不传递该字段
+     */
+    private String reasoningEffort;
+
+    /**
      * 核采样参数
      */
     private Double topP;

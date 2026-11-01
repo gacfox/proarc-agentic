@@ -134,6 +134,7 @@ public class ReActAgentExecutor {
                 .messages(context.getMessages())
                 .temperature(context.getTemperature())
                 .enableThinking(context.getEnableThinking())
+                .reasoningEffort(context.getReasoningEffort())
                 .topP(context.getTopP())
                 .topK(context.getTopK())
                 .presencePenalty(context.getPresencePenalty())

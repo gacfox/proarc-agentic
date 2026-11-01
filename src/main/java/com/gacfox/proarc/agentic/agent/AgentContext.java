@@ -49,6 +49,10 @@ public class AgentContext implements Serializable {
      */
     private Boolean enableThinking;
     /**
+     * 推理强度，为null时不传递该字段
+     */
+    private String reasoningEffort;
+    /**
      * 核采样参数
      */
     private Double topP;
@@ -120,6 +124,7 @@ public class AgentContext implements Serializable {
                 .toolNames(toolNames == null ? null : new ArrayList<>(toolNames))
                 .temperature(temperature)
                 .enableThinking(enableThinking)
+                .reasoningEffort(reasoningEffort)
                 .topP(topP)
                 .topK(topK)
                 .presencePenalty(presencePenalty)
