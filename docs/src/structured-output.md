@@ -57,7 +57,7 @@ FeedbackAnalysis result = response.extract();
 
 ## 请求参数
 
-`StructuredChatRequest` 的采样参数（temperature、topP、topK、presencePenalty、frequencyPenalty、seed、maxTokens、enableThinking）与 `ChatRequest` 语义一致，不再赘述。除此之外有三个特有字段。
+`StructuredChatRequest` 的采样参数（temperature、topP、topK、presencePenalty、frequencyPenalty、seed、maxTokens、enableThinking、reasoningEffort）与 `ChatRequest` 语义一致，不再赘述。除此之外有三个特有字段。
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|

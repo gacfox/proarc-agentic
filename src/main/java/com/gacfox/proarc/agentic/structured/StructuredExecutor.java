@@ -68,6 +68,7 @@ public class StructuredExecutor {
                 .messages(messages)
                 .temperature(request.getTemperature())
                 .enableThinking(request.getEnableThinking())
+                .reasoningEffort(request.getReasoningEffort())
                 .topP(request.getTopP())
                 .topK(request.getTopK())
                 .presencePenalty(request.getPresencePenalty())

@@ -1,5 +1,6 @@
 package com.gacfox.proarc.agentic.structured;
 
+import com.gacfox.proarc.agentic.model.ReasoningEffort;
 import com.gacfox.proarc.agentic.model.openai.Message;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -50,6 +51,11 @@ public class StructuredChatRequest<T> implements Serializable {
      * 是否开启思考
      */
     private Boolean enableThinking;
+
+    /**
+     * 推理强度，可参考{@link ReasoningEffort}的内置值，也可传入Provider支持的其他字符串；为null时不传递该字段
+     */
+    private String reasoningEffort;
 
     /**
      * 核采样参数

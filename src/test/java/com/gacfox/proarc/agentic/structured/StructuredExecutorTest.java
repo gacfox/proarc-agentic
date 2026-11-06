@@ -2,6 +2,7 @@ package com.gacfox.proarc.agentic.structured;
 
 import com.gacfox.proarc.agentic.client.LlmClient;
 import com.gacfox.proarc.agentic.model.ChatRequest;
+import com.gacfox.proarc.agentic.model.ReasoningEffort;
 import com.gacfox.proarc.agentic.model.SystemMessage;
 import com.gacfox.proarc.agentic.model.UserMessage;
 import com.gacfox.proarc.agentic.model.openai.Choice;
@@ -117,6 +118,21 @@ class StructuredExecutorTest {
         verify(llmClient).blockingChat(captor.capture());
         assertThat(captor.getValue().getMessages()).hasSize(2);
         assertThat(captor.getValue().getMessages().getFirst().getContent()).isEqualTo("自定义系统提示");
+    }
+
+    @Test
+    void passesReasoningEffortToChatRequest() {
+        when(llmClient.blockingChat(any()))
+                .thenReturn(responseWithToolCall("structured_output", "{\"name\":\"Tom\"}"));
+
+        StructuredChatRequest<Person> request = personRequest();
+        request.setReasoningEffort(ReasoningEffort.XHIGH);
+
+        executor.execute(request);
+
+        ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(llmClient).blockingChat(captor.capture());
+        assertThat(captor.getValue().getReasoningEffort()).isEqualTo("xhigh");
     }
 
     @Test
