@@ -30,4 +30,18 @@ public class Usage implements Serializable {
      */
     @JsonProperty("total_tokens")
     private Integer totalTokens;
+    /**
+     * 输入tokens明细
+     */
+    @JsonProperty("prompt_tokens_details")
+    private PromptTokensDetails promptTokensDetails;
+
+    /**
+     * 获取输入中命中缓存的tokens数
+     *
+     * @return 缓存tokens数，provider未上报时返回null
+     */
+    public Integer getCachedTokens() {
+        return promptTokensDetails != null ? promptTokensDetails.getCachedTokens() : null;
+    }
 }
