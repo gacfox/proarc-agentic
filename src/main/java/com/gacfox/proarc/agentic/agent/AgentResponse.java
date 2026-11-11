@@ -24,6 +24,10 @@ public class AgentResponse implements Serializable {
          */
         THINKING,
         /**
+         * 模型正文（content）
+         */
+        CONTENT,
+        /**
          * 工具调用
          */
         TOOL_CALL,
@@ -32,9 +36,9 @@ public class AgentResponse implements Serializable {
          */
         TOOL_RESULT,
         /**
-         * 最终回答
+         * 智能体正常执行完成，content为最终答案
          */
-        FINAL_ANSWER,
+        COMPLETED,
         /**
          * 智能体执行出错
          */
@@ -44,9 +48,9 @@ public class AgentResponse implements Serializable {
          */
         THINKING_DELTA,
         /**
-         * 最终回答增量片段（仅streaming模式产生）
+         * 模型正文增量片段（仅streaming模式产生）
          */
-        FINAL_ANSWER_DELTA,
+        CONTENT_DELTA,
         /**
          * 智能体执行被外部请求停止
          */
@@ -89,6 +93,16 @@ public class AgentResponse implements Serializable {
     }
 
     /**
+     * 生成模型正文事件
+     *
+     * @param content 正文内容
+     * @return 事件对象
+     */
+    public static AgentResponse content(String content) {
+        return AgentResponse.builder().type(Type.CONTENT).content(content).build();
+    }
+
+    /**
      * 生成智能体工具调用事件
      *
      * @param toolCallId    工具调用ID
@@ -115,13 +129,13 @@ public class AgentResponse implements Serializable {
     }
 
     /**
-     * 生成智能体最终回答结果事件
+     * 生成智能体正常完成事件
      *
-     * @param content 回答内容
+     * @param content 最终答案
      * @return 事件对象
      */
-    public static AgentResponse finalAnswer(String content) {
-        return AgentResponse.builder().type(Type.FINAL_ANSWER).content(content).build();
+    public static AgentResponse completed(String content) {
+        return AgentResponse.builder().type(Type.COMPLETED).content(content).build();
     }
 
     /**
@@ -145,13 +159,13 @@ public class AgentResponse implements Serializable {
     }
 
     /**
-     * 生成智能体最终回答增量事件（仅streaming模式）
+     * 生成模型正文增量事件（仅streaming模式）
      *
-     * @param content 回答内容增量片段
+     * @param content 正文内容增量片段
      * @return 事件对象
      */
-    public static AgentResponse finalAnswerDelta(String content) {
-        return AgentResponse.builder().type(Type.FINAL_ANSWER_DELTA).content(content).build();
+    public static AgentResponse contentDelta(String content) {
+        return AgentResponse.builder().type(Type.CONTENT_DELTA).content(content).build();
     }
 
     /**

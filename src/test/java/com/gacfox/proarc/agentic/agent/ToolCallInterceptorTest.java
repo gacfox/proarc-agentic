@@ -156,6 +156,7 @@ class ToolCallInterceptorTest {
                 .toolRegistry(toolRegistry)
                 .defaultToolNames(List.of("spy_weather", "spy_time"))
                 .toolCallInterceptors(List.of(interceptors))
+                .convergenceMode(ConvergenceMode.FINAL_ANSWER)
                 .build();
     }
 
@@ -203,7 +204,7 @@ class ToolCallInterceptorTest {
 
         assertThat(spyTools.weatherExecutions).hasValue(0);
         assertThat(events.get(1).getContent()).isEqualTo("Error: tool call rejected by reviewer.");
-        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.FINAL_ANSWER);
+        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.COMPLETED);
     }
 
     @Test
@@ -218,7 +219,7 @@ class ToolCallInterceptorTest {
 
         assertThat(spyTools.weatherExecutions).hasValue(0);
         assertThat(events.get(1).getContent()).startsWith("Error:");
-        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.FINAL_ANSWER);
+        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.COMPLETED);
     }
 
     @Test
@@ -274,7 +275,7 @@ class ToolCallInterceptorTest {
 
         assertThat(interceptedToolNames).containsExactly("final_answer");
         assertThat(events).extracting(AgentResponse::getType)
-                .containsExactly(AgentResponse.Type.TOOL_CALL, AgentResponse.Type.FINAL_ANSWER);
+                .containsExactly(AgentResponse.Type.TOOL_CALL, AgentResponse.Type.COMPLETED);
         assertThat(events.get(1).getContent()).isEqualTo("原始答案（已审核）");
     }
 
@@ -339,7 +340,7 @@ class ToolCallInterceptorTest {
                         AgentResponse.Type.TOOL_CALL,
                         AgentResponse.Type.TOOL_RESULT,
                         AgentResponse.Type.TOOL_CALL,
-                        AgentResponse.Type.FINAL_ANSWER);
+                        AgentResponse.Type.COMPLETED);
         assertThat(secondRun.get(1).getContent()).isEqualTo("北京：晴，26℃");
         assertThat(spyTools.weatherExecutions).hasValue(1);
         Message toolMessage = client.receivedRequests.get(1).getMessages().stream()
@@ -375,7 +376,7 @@ class ToolCallInterceptorTest {
         assertThat(spyTools.weatherExecutions).hasValue(0);
         assertThat(secondRun.get(1).getType()).isEqualTo(AgentResponse.Type.TOOL_RESULT);
         assertThat(secondRun.get(1).getContent()).contains("rejected");
-        assertThat(secondRun).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.FINAL_ANSWER);
+        assertThat(secondRun).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.COMPLETED);
     }
 
     @Test
@@ -405,7 +406,7 @@ class ToolCallInterceptorTest {
                         AgentResponse.Type.TOOL_CALL,
                         AgentResponse.Type.TOOL_RESULT,
                         AgentResponse.Type.TOOL_CALL,
-                        AgentResponse.Type.FINAL_ANSWER);
+                        AgentResponse.Type.COMPLETED);
         assertThat(secondRun.get(0).getToolCallId()).isEqualTo("call-2");
     }
 
@@ -430,7 +431,7 @@ class ToolCallInterceptorTest {
 
         assertThat(spyTools.weatherExecutions).hasValue(0);
         assertThat(events).extracting(AgentResponse::getType)
-                .containsExactly(AgentResponse.Type.TOOL_CALL, AgentResponse.Type.FINAL_ANSWER);
+                .containsExactly(AgentResponse.Type.TOOL_CALL, AgentResponse.Type.COMPLETED);
     }
 
     @Test
@@ -458,7 +459,7 @@ class ToolCallInterceptorTest {
         List<AgentResponse> events = run(executor(client, (invocation, chain) -> chain.proceed(invocation)), ctx);
 
         assertThat(events).extracting(AgentResponse::getType)
-                .containsExactly(AgentResponse.Type.TOOL_CALL, AgentResponse.Type.FINAL_ANSWER);
+                .containsExactly(AgentResponse.Type.TOOL_CALL, AgentResponse.Type.COMPLETED);
         assertThat(events.get(1).getContent()).isEqualTo("北京晴");
         assertThat(client.receivedRequests).isEmpty();
     }
@@ -519,8 +520,7 @@ class ToolCallInterceptorTest {
                 .containsExactly(
                         AgentResponse.Type.TOOL_CALL,
                         AgentResponse.Type.TOOL_RESULT,
-                        AgentResponse.Type.FINAL_ANSWER_DELTA,
                         AgentResponse.Type.TOOL_CALL,
-                        AgentResponse.Type.FINAL_ANSWER);
+                        AgentResponse.Type.COMPLETED);
     }
 }

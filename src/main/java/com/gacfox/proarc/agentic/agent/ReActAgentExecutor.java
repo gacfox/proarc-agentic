@@ -38,6 +38,8 @@ public class ReActAgentExecutor {
     private final List<ToolCallInterceptor> toolCallInterceptors;
     @Builder.Default
     private final int maxIterations = 50;
+    @Builder.Default
+    private final ConvergenceMode convergenceMode = ConvergenceMode.NO_TOOL_CALL;
 
     public Flux<AgentResponse> execute(AgentContext context) {
         Sinks.Many<AgentResponse> sink = Sinks.many().unicast().onBackpressureBuffer();
@@ -141,8 +143,8 @@ public class ReActAgentExecutor {
                 .frequencyPenalty(context.getFrequencyPenalty())
                 .seed(context.getSeed())
                 .maxTokens(context.getMaxTokens())
-                .tools(tools)
-                .toolChoice("auto")
+                .tools(tools.isEmpty() ? null : tools)
+                .toolChoice(tools.isEmpty() ? null : "auto")
                 .build();
         ModelResponse response = context.isStreaming()
                 ? streamingChat(llmClient, chatRequest, sink, cancelled, context)
@@ -162,23 +164,43 @@ public class ReActAgentExecutor {
         if (StringUtils.hasText(thinking)) {
             emit(sink, responses, AgentResponse.thinking(thinking));
         }
+        String content = response.extractBlockingContent();
+        if (content != null && !content.isEmpty()) {
+            emit(sink, responses, AgentResponse.content(content));
+        }
 
         String finishReason = response.extractBlockingFinishReason();
+        List<ToolCall> toolCalls = response.extractBlockingToolCalls();
+        if (toolCalls.isEmpty() && !isFinalAnswerMode()) {
+            if ("length".equals(finishReason)) {
+                throw new IllegalStateException("LLM response was truncated before producing a complete answer");
+            }
+            if (!"stop".equals(finishReason)) {
+                throw new IllegalStateException(
+                        "LLM response ended abnormally without tool calls: finish_reason='" + finishReason + "'");
+            }
+            if (!StringUtils.hasText(content)) {
+                throw new IllegalStateException("LLM returned empty content without tool calls");
+            }
+            emit(sink, responses, AgentResponse.completed(content));
+            return AgentLoopResult.finishWith(responses);
+        }
         if (!"tool_calls".equals(finishReason)) {
             repairOrphanedToolCalls(assistantMessage, finishReason, context, sink, responses);
-            context.getMessages().add(Message.builder()
-                    .role(Message.ROLE_USER)
-                    .content("""
-                            No tool call was detected.
-                            To finish: call final_answer.
-                            To continue working: call the required tool immediately.
-                            Plain text descriptions of tool usage are not allowed.
-                            """)
-                    .build());
+            if (isFinalAnswerMode()) {
+                context.getMessages().add(Message.builder()
+                        .role(Message.ROLE_USER)
+                        .content("""
+                                No tool call was detected.
+                                To finish: call final_answer.
+                                To continue working: call the required tool immediately.
+                                Plain text descriptions of tool usage are not allowed.
+                                """)
+                        .build());
+            }
             return AgentLoopResult.continueWith(responses);
         }
 
-        List<ToolCall> toolCalls = response.extractBlockingToolCalls();
         String finalMessage;
         try {
             finalMessage = processToolCalls(toolCalls, context, sink, cancelled, toolMap, responses,
@@ -223,7 +245,7 @@ public class ReActAgentExecutor {
                 continue;
             }
 
-            boolean isFinalAnswer = FINAL_ANSWER_TOOL.equals(toolName);
+            boolean isFinalAnswer = isFinalAnswerMode() && FINAL_ANSWER_TOOL.equals(toolName);
             if (!isFinalAnswer) {
                 if (!StringUtils.hasText(arguments)) {
                     arguments = "{}";
@@ -255,12 +277,14 @@ public class ReActAgentExecutor {
 
             if (isFinalAnswer) {
                 finalMessage = result;
-                emit(sink, responses, AgentResponse.finalAnswer(finalMessage));
                 context.getMessages().add(toolResultMessage(toolCall.getId(), "Final answer submitted."));
             } else {
                 emit(sink, responses, AgentResponse.toolResult(toolCall.getId(), toolName, result));
                 context.getMessages().add(toolResultMessage(toolCall.getId(), result));
             }
+        }
+        if (finalMessage != null) {
+            emit(sink, responses, AgentResponse.completed(finalMessage));
         }
         return finalMessage;
     }
@@ -275,7 +299,7 @@ public class ReActAgentExecutor {
                 if (index < sortedToolCallInterceptors.size()) {
                     return sortedToolCallInterceptors.get(index++).intercept(invocation, this);
                 }
-                if (FINAL_ANSWER_TOOL.equals(invocation.getToolName())) {
+                if (isFinalAnswerMode() && FINAL_ANSWER_TOOL.equals(invocation.getToolName())) {
                     return extractFinalAnswer(invocation.getArguments());
                 }
                 return invokeTool(toolMap, invocation.getToolName(), invocation.getArguments(),
@@ -342,13 +366,11 @@ public class ReActAgentExecutor {
     }
 
     /**
-     * 流式增量事件发射器：收集chunk用于最终聚合，同时把思考与final_answer的内容增量实时发射为delta事件
+     * 流式增量事件发射器：收集chunk用于最终聚合，同时实时发射思考与正文增量事件
      */
     private static final class StreamingDeltaEmitter {
         private final Sinks.Many<AgentResponse> sink;
         private final List<ModelResponse> chunks = new ArrayList<>();
-        private final Map<Integer, String> toolNames = new HashMap<>();
-        private final Map<Integer, FinalAnswerDeltaExtractor> extractors = new HashMap<>();
 
         private StreamingDeltaEmitter(Sinks.Many<AgentResponse> sink) {
             this.sink = sink;
@@ -370,127 +392,10 @@ public class ReActAgentExecutor {
                 if (StringUtils.hasText(delta.getReasoning())) {
                     emitSignal(sink, AgentResponse.thinkingDelta(delta.getReasoning()));
                 }
-                if (delta.getToolCalls() != null) {
-                    for (ToolCall toolCall : delta.getToolCalls()) {
-                        int index = toolCall.getIndex() != null ? toolCall.getIndex() : 0;
-                        ToolCallFunction fn = toolCall.getFunction();
-                        if (fn == null) {
-                            continue;
-                        }
-                        if (StringUtils.hasText(fn.getName())) {
-                            toolNames.put(index, fn.getName());
-                        }
-                        if (FINAL_ANSWER_TOOL.equals(toolNames.get(index)) && fn.getArguments() != null) {
-                            String text = extractors.computeIfAbsent(index, k -> new FinalAnswerDeltaExtractor())
-                                    .accept(fn.getArguments());
-                            if (!text.isEmpty()) {
-                                emitSignal(sink, AgentResponse.finalAnswerDelta(text));
-                            }
-                        }
-                    }
+                if (delta.getContent() != null && !delta.getContent().isEmpty()) {
+                    emitSignal(sink, AgentResponse.contentDelta(delta.getContent()));
                 }
             }
-        }
-    }
-
-    /**
-     * final_answer工具参数的增量解析器：从流式拼接的JSON参数中增量解码message字段文本，
-     * 容错处理不完整JSON与跨chunk边界的转义序列
-     */
-    private static final class FinalAnswerDeltaExtractor {
-        private final StringBuilder raw = new StringBuilder();
-        private int emitted;
-
-        String accept(String fragment) {
-            raw.append(fragment);
-            String decoded = decodeMessageValue(raw);
-            if (decoded.length() <= emitted) {
-                return "";
-            }
-            String delta = decoded.substring(emitted);
-            emitted = decoded.length();
-            return delta;
-        }
-
-        private static String decodeMessageValue(StringBuilder raw) {
-            int keyIndex = raw.indexOf("\"message\"");
-            if (keyIndex < 0) {
-                return "";
-            }
-            int i = keyIndex + "\"message\"".length();
-            while (i < raw.length() && (raw.charAt(i) == ':' || Character.isWhitespace(raw.charAt(i)))) {
-                i++;
-            }
-            if (i >= raw.length() || raw.charAt(i) != '"') {
-                return "";
-            }
-            i++;
-            StringBuilder out = new StringBuilder();
-            boolean closed = false;
-            while (i < raw.length()) {
-                char c = raw.charAt(i);
-                if (c == '"') {
-                    closed = true;
-                    break;
-                }
-                if (c != '\\') {
-                    out.append(c);
-                    i++;
-                    continue;
-                }
-                if (i + 1 >= raw.length()) {
-                    break;
-                }
-                char esc = raw.charAt(i + 1);
-                switch (esc) {
-                    case '"', '\\', '/' -> {
-                        out.append(esc);
-                        i += 2;
-                    }
-                    case 'n' -> {
-                        out.append('\n');
-                        i += 2;
-                    }
-                    case 't' -> {
-                        out.append('\t');
-                        i += 2;
-                    }
-                    case 'r' -> {
-                        out.append('\r');
-                        i += 2;
-                    }
-                    case 'b' -> {
-                        out.append('\b');
-                        i += 2;
-                    }
-                    case 'f' -> {
-                        out.append('\f');
-                        i += 2;
-                    }
-                    case 'u' -> {
-                        if (i + 5 >= raw.length()) {
-                            return out.toString();
-                        }
-                        int codeUnit;
-                        try {
-                            codeUnit = Integer.parseInt(raw.substring(i + 2, i + 6), 16);
-                        } catch (NumberFormatException e) {
-                            return out.toString();
-                        }
-                        out.append((char) codeUnit);
-                        i += 6;
-                    }
-                    default -> {
-                        out.append(esc);
-                        i += 2;
-                    }
-                }
-            }
-            int length = out.length();
-            if (!closed && length > 0 && Character.isHighSurrogate(out.charAt(length - 1))) {
-                out.setLength(length - 1);
-            }
-            return out.toString();
         }
     }
 
@@ -546,20 +451,26 @@ public class ReActAgentExecutor {
                 throw new RuntimeException("Failed to parse tool JSON schema: " + td.getToolName(), e);
             }
         }
-        tools.add(Tool.builder().function(
-                Function.builder()
-                        .name(FINAL_ANSWER_TOOL)
-                        .description("Submit the final answer to the user's request and end the agent loop")
-                        .parameters(Parameters.builder()
-                                .properties(Map.of("message",
-                                        Property.builder()
-                                                .type("string")
-                                                .description("The final answer message")
-                                                .build()))
-                                .required(List.of("message"))
-                                .build())
-                        .build()).build());
+        if (isFinalAnswerMode()) {
+            tools.add(Tool.builder().function(
+                    Function.builder()
+                            .name(FINAL_ANSWER_TOOL)
+                            .description("Submit the final answer to the user's request and end the agent loop")
+                            .parameters(Parameters.builder()
+                                    .properties(Map.of("message",
+                                            Property.builder()
+                                                    .type("string")
+                                                    .description("The final answer message")
+                                                    .build()))
+                                    .required(List.of("message"))
+                                    .build())
+                            .build()).build());
+        }
         return tools;
+    }
+
+    private boolean isFinalAnswerMode() {
+        return convergenceMode == ConvergenceMode.FINAL_ANSWER;
     }
 
     /**

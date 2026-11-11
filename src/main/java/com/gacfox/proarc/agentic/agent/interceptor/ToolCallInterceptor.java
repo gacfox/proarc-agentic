@@ -5,7 +5,7 @@ import com.gacfox.proarc.agentic.agent.ToolInvocation;
 /**
  * 工具调用环绕拦截器
  * <p>
- * 每一次真正执行的工具调用（含内置final_answer）都会经过拦截器链。拦截器通过
+ * 每一次真正执行的工具调用（含FINAL_ANSWER收敛模式下的内置final_answer）都会经过拦截器链。拦截器通过
  * {@link ToolCallChain} 掌握下游调用，在 {@code chain.proceed(invocation)}
  * 前后编写前置和后置逻辑，可用于审计、参数改写、结果替换、阻塞等待、
  * 拒绝执行等场景。典型用法示例：human-in-the-loop审批。

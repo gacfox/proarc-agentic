@@ -108,6 +108,23 @@ class ReActAgentExecutorTest {
                 .build();
     }
 
+    private static ModelResponse directAnswerResponse(String message) {
+        return contentResponse(message, "stop");
+    }
+
+    private static ModelResponse contentResponse(String content, String finishReason) {
+        return ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .finishReason(finishReason)
+                        .message(Message.builder()
+                                .role(Message.ROLE_ASSISTANT)
+                                .content(content)
+                                .build())
+                        .build()))
+                .build();
+    }
+
     private static ModelResponse finalAnswerResponse(String message) {
         return toolCallResponse("call-final", "final_answer", "{\"message\":\"" + message + "\"}");
     }
@@ -138,24 +155,33 @@ class ReActAgentExecutorTest {
                 .build();
     }
 
+    private ReActAgentExecutor forcedExecutor(FakeLlmClient client) {
+        return ReActAgentExecutor.builder()
+                .defaultLlmClient(client)
+                .toolRegistry(toolRegistry)
+                .defaultToolNames(List.of("query_weather"))
+                .convergenceMode(ConvergenceMode.FINAL_ANSWER)
+                .build();
+    }
+
     @Test
     void emptyStringArgumentsForNoArgToolInvokesNormally() {
         FakeLlmClient client = new FakeLlmClient(
                 toolCallResponse("call-1", "current_time", ""),
-                finalAnswerResponse("现在是12点"));
+                directAnswerResponse("现在是12点"));
 
         List<AgentResponse> events = run(executorWithTools(client, "current_time"), context("现在几点？"));
 
         assertThat(events.get(1).getType()).isEqualTo(AgentResponse.Type.TOOL_RESULT);
         assertThat(events.get(1).getContent()).isEqualTo("12:00");
-        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.FINAL_ANSWER);
+        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.COMPLETED);
     }
 
     @Test
     void nullArgumentsForNoArgToolInvokesNormally() {
         FakeLlmClient client = new FakeLlmClient(
                 toolCallResponse("call-1", "current_time", null),
-                finalAnswerResponse("现在是12点"));
+                directAnswerResponse("现在是12点"));
 
         List<AgentResponse> events = run(executorWithTools(client, "current_time"), context("现在几点？"));
 
@@ -167,7 +193,7 @@ class ReActAgentExecutorTest {
     void blankArgumentsForNoArgToolInvokesNormally() {
         FakeLlmClient client = new FakeLlmClient(
                 toolCallResponse("call-1", "current_time", "   "),
-                finalAnswerResponse("现在是12点"));
+                directAnswerResponse("现在是12点"));
 
         List<AgentResponse> events = run(executorWithTools(client, "current_time"), context("现在几点？"));
 
@@ -179,7 +205,7 @@ class ReActAgentExecutorTest {
     void fullReActLoopInvokesToolAndReturnsFinalAnswer() {
         FakeLlmClient client = new FakeLlmClient(
                 toolCallResponse("call-1", "query_weather", "{\"city\":\"北京\"}"),
-                finalAnswerResponse("北京今天晴，26℃"));
+                directAnswerResponse("北京今天晴，26℃"));
 
         List<AgentResponse> events = run(executor(client), context("北京天气怎么样？"));
 
@@ -187,10 +213,31 @@ class ReActAgentExecutorTest {
                 .containsExactly(
                         AgentResponse.Type.TOOL_CALL,
                         AgentResponse.Type.TOOL_RESULT,
-                        AgentResponse.Type.TOOL_CALL,
-                        AgentResponse.Type.FINAL_ANSWER);
+                        AgentResponse.Type.CONTENT,
+                        AgentResponse.Type.COMPLETED);
         assertThat(events.get(0).getToolName()).isEqualTo("query_weather");
         assertThat(events.get(1).getContent()).isEqualTo("北京：晴，26℃");
+        assertThat(events.get(3).getContent()).isEqualTo("北京今天晴，26℃");
+    }
+
+    @Test
+    void intermediateContentIsEmittedBeforeToolCalls() {
+        ModelResponse toolResponse = toolCallResponse("call-1", "query_weather", "{\"city\":\"北京\"}");
+        toolResponse.getChoices().getFirst().getMessage().setContent("我先查询天气");
+        FakeLlmClient client = new FakeLlmClient(
+                toolResponse,
+                directAnswerResponse("北京今天晴，26℃"));
+
+        List<AgentResponse> events = run(executor(client), context("北京天气怎么样？"));
+
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(
+                        AgentResponse.Type.CONTENT,
+                        AgentResponse.Type.TOOL_CALL,
+                        AgentResponse.Type.TOOL_RESULT,
+                        AgentResponse.Type.CONTENT,
+                        AgentResponse.Type.COMPLETED);
+        assertThat(events.get(0).getContent()).isEqualTo("我先查询天气");
         assertThat(events.get(3).getContent()).isEqualTo("北京今天晴，26℃");
     }
 
@@ -198,7 +245,7 @@ class ReActAgentExecutorTest {
     void toolResultIsAppendedToMessageHistory() {
         FakeLlmClient client = new FakeLlmClient(
                 toolCallResponse("call-1", "query_weather", "{\"city\":\"北京\"}"),
-                finalAnswerResponse("完成"));
+                directAnswerResponse("完成"));
 
         run(executor(client), context("北京天气怎么样？"));
 
@@ -211,19 +258,133 @@ class ReActAgentExecutorTest {
     }
 
     @Test
-    void directFinalAnswerEndsLoop() {
-        FakeLlmClient client = new FakeLlmClient(finalAnswerResponse("直接回答"));
+    void directContentEndsLoopByDefault() {
+        FakeLlmClient client = new FakeLlmClient(directAnswerResponse("直接回答"));
 
         List<AgentResponse> events = run(executor(client), context("你好"));
 
         assertThat(events).extracting(AgentResponse::getType)
-                .containsExactly(AgentResponse.Type.TOOL_CALL, AgentResponse.Type.FINAL_ANSWER);
+                .containsExactly(AgentResponse.Type.CONTENT, AgentResponse.Type.COMPLETED);
+        assertThat(events.get(0).getContent()).isEqualTo("直接回答");
+        assertThat(events.get(1).getContent()).isEqualTo("直接回答");
+        assertThat(client.receivedRequests).hasSize(1);
+        assertThat(client.receivedRequests.getFirst().getTools())
+                .noneMatch(tool -> "final_answer".equals(tool.getFunction().getName()));
+        assertThat(client.receivedRequests.getFirst().getToolChoice()).isEqualTo("auto");
+    }
+
+    @Test
+    void noToolsOmitsToolsAndToolChoice() {
+        FakeLlmClient client = new FakeLlmClient(directAnswerResponse("直接回答"));
+        ReActAgentExecutor executor = ReActAgentExecutor.builder()
+                .defaultLlmClient(client)
+                .toolRegistry(toolRegistry)
+                .build();
+
+        List<AgentResponse> events = run(executor, context("你好"));
+
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(AgentResponse.Type.CONTENT, AgentResponse.Type.COMPLETED);
+        ChatRequest request = client.receivedRequests.getFirst();
+        assertThat(request.getTools()).isNull();
+        assertThat(request.getToolChoice()).isNull();
+    }
+
+    @Test
+    void emptyOrBlankContentWithoutToolCallsEmitsError() {
+        for (String content : new String[]{null, "", "  \n"}) {
+            FakeLlmClient client = new FakeLlmClient(directAnswerResponse(content));
+
+            List<AgentResponse> events = run(executor(client), context("你好"));
+
+            assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.ERROR);
+            assertThat(events).noneMatch(event -> event.getType() == AgentResponse.Type.COMPLETED);
+            assertThat(events.getLast().getContent()).contains("empty content");
+            assertThat(client.receivedRequests).hasSize(1);
+        }
+    }
+
+    @Test
+    void truncatedContentWithoutToolCallsEmitsErrorInsteadOfCompleting() {
+        FakeLlmClient client = new FakeLlmClient(contentResponse("未完成的回答", "length"));
+
+        List<AgentResponse> events = run(executor(client), context("你好"));
+
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(AgentResponse.Type.CONTENT, AgentResponse.Type.ERROR);
+        assertThat(events.getLast().getContent()).contains("truncated");
         assertThat(client.receivedRequests).hasSize(1);
     }
 
     @Test
+    void abnormalFinishReasonWithoutToolCallsEmitsError() {
+        FakeLlmClient client = new FakeLlmClient(contentResponse("不完整的内容", "content_filter"));
+
+        List<AgentResponse> events = run(executor(client), context("你好"));
+
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(AgentResponse.Type.CONTENT, AgentResponse.Type.ERROR);
+        assertThat(events.getLast().getContent()).contains("content_filter");
+    }
+
+    @Test
+    void finalAnswerToolEndsLoopInForcedMode() {
+        FakeLlmClient client = new FakeLlmClient(finalAnswerResponse("直接回答"));
+
+        List<AgentResponse> events = run(forcedExecutor(client), context("你好"));
+
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(AgentResponse.Type.TOOL_CALL, AgentResponse.Type.COMPLETED);
+        assertThat(events.get(1).getContent()).isEqualTo("直接回答");
+        assertThat(client.receivedRequests).hasSize(1);
+        assertThat(client.receivedRequests.getFirst().getTools())
+                .anyMatch(tool -> "final_answer".equals(tool.getFunction().getName()));
+        assertThat(client.receivedRequests.getFirst().getToolChoice()).isEqualTo("auto");
+    }
+
+    @Test
+    void completedIsEmittedAfterSkippedCallsInForcedMode() {
+        ModelResponse finalThenTool = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .finishReason("tool_calls")
+                        .message(Message.builder()
+                                .role(Message.ROLE_ASSISTANT)
+                                .toolCalls(List.of(
+                                        ToolCall.builder()
+                                                .id("call-final")
+                                                .function(ToolCallFunction.builder()
+                                                        .name("final_answer")
+                                                        .arguments("{\"message\":\"完成\"}")
+                                                        .build())
+                                                .build(),
+                                        ToolCall.builder()
+                                                .id("call-weather")
+                                                .function(ToolCallFunction.builder()
+                                                        .name("query_weather")
+                                                        .arguments("{\"city\":\"北京\"}")
+                                                        .build())
+                                                .build()))
+                                .build())
+                        .build()))
+                .build();
+        FakeLlmClient client = new FakeLlmClient(finalThenTool);
+
+        List<AgentResponse> events = run(forcedExecutor(client), context("测试"));
+
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(
+                        AgentResponse.Type.TOOL_CALL,
+                        AgentResponse.Type.TOOL_CALL,
+                        AgentResponse.Type.TOOL_RESULT,
+                        AgentResponse.Type.COMPLETED);
+        assertThat(events.get(2).getContent()).startsWith("Skipped:");
+        assertThat(events.getLast().getContent()).isEqualTo("完成");
+    }
+
+    @Test
     void passesReasoningEffortToLlmRequest() {
-        FakeLlmClient client = new FakeLlmClient(finalAnswerResponse("完成"));
+        FakeLlmClient client = new FakeLlmClient(directAnswerResponse("完成"));
         AgentContext context = AgentContext.builder()
                 .messages(new ArrayList<>(List.of(new UserMessage("你好"))))
                 .reasoningEffort(ReasoningEffort.XHIGH)
@@ -239,20 +400,20 @@ class ReActAgentExecutorTest {
     void unknownToolReturnsErrorResultAndContinues() {
         FakeLlmClient client = new FakeLlmClient(
                 toolCallResponse("call-1", "nonexistent", "{}"),
-                finalAnswerResponse("恢复"));
+                directAnswerResponse("恢复"));
 
         List<AgentResponse> events = run(executor(client), context("测试"));
 
         assertThat(events.get(1).getType()).isEqualTo(AgentResponse.Type.TOOL_RESULT);
         assertThat(events.get(1).getContent()).contains("not found");
-        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.FINAL_ANSWER);
+        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.COMPLETED);
     }
 
     @Test
     void invalidJsonArgumentsProduceErrorResult() {
         FakeLlmClient client = new FakeLlmClient(
                 toolCallResponse("call-1", "query_weather", "not-json"),
-                finalAnswerResponse("恢复"));
+                directAnswerResponse("恢复"));
 
         List<AgentResponse> events = run(executor(client), context("测试"));
 
@@ -270,7 +431,7 @@ class ReActAgentExecutorTest {
         });
         FakeLlmClient client = new FakeLlmClient(
                 toolCallResponse("call-1", "failing_tool", "{\"city\":\"北京\"}"),
-                finalAnswerResponse("恢复"));
+                directAnswerResponse("恢复"));
 
         ReActAgentExecutor executor = ReActAgentExecutor.builder()
                 .defaultLlmClient(client)
@@ -281,7 +442,7 @@ class ReActAgentExecutorTest {
         List<AgentResponse> events = run(executor, context("测试"));
 
         assertThat(events.get(1).getContent()).startsWith("Error:");
-        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.FINAL_ANSWER);
+        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.COMPLETED);
     }
 
     @Test
@@ -295,9 +456,13 @@ class ReActAgentExecutorTest {
                 .build();
         FakeLlmClient client = new FakeLlmClient(plainText, finalAnswerResponse("恢复"));
 
-        List<AgentResponse> events = run(executor(client), context("测试"));
+        List<AgentResponse> events = run(forcedExecutor(client), context("测试"));
 
-        assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.FINAL_ANSWER);
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(
+                        AgentResponse.Type.CONTENT,
+                        AgentResponse.Type.TOOL_CALL,
+                        AgentResponse.Type.COMPLETED);
         assertThat(client.receivedRequests.get(1).getMessages().get(2).getContent().toString())
                 .contains("No tool call was detected");
     }
@@ -324,34 +489,22 @@ class ReActAgentExecutorTest {
     }
 
     @Test
-    void streamingModeEmitsFinalAnswerDeltas() {
+    void streamingModeEmitsContentDeltasAndCompleted() {
         FakeLlmClient client = new FakeLlmClient();
         ModelResponse chunk1 = ModelResponse.builder()
                 .choices(List.of(Choice.builder()
                         .index(0)
                         .delta(Delta.builder()
                                 .role("assistant")
-                                .toolCalls(List.of(ToolCall.builder()
-                                        .id("c1")
-                                        .index(0)
-                                        .function(ToolCallFunction.builder()
-                                                .name("final_answer")
-                                                .arguments("{\"message\":\"北京今天晴")
-                                                .build())
-                                        .build()))
+                                .content("北京今天晴")
                                 .build())
                         .build()))
                 .build();
         ModelResponse chunk2 = ModelResponse.builder()
                 .choices(List.of(Choice.builder()
                         .index(0)
-                        .finishReason("tool_calls")
-                        .delta(Delta.builder()
-                                .toolCalls(List.of(ToolCall.builder()
-                                        .index(0)
-                                        .function(ToolCallFunction.builder().arguments("\"}").build())
-                                        .build()))
-                                .build())
+                        .finishReason("stop")
+                        .delta(Delta.builder().content("，26℃").build())
                         .build()))
                 .build();
         client.enqueueStreaming(Flux.just(chunk1, chunk2));
@@ -363,11 +516,90 @@ class ReActAgentExecutorTest {
 
         assertThat(events).extracting(AgentResponse::getType)
                 .containsExactly(
-                        AgentResponse.Type.FINAL_ANSWER_DELTA,
-                        AgentResponse.Type.TOOL_CALL,
-                        AgentResponse.Type.FINAL_ANSWER);
+                        AgentResponse.Type.CONTENT_DELTA,
+                        AgentResponse.Type.CONTENT_DELTA,
+                        AgentResponse.Type.CONTENT,
+                        AgentResponse.Type.COMPLETED);
         assertThat(events.get(0).getContent()).isEqualTo("北京今天晴");
-        assertThat(events.get(2).getContent()).isEqualTo("北京今天晴");
+        assertThat(events.get(1).getContent()).isEqualTo("，26℃");
+        assertThat(events.get(2).getContent()).isEqualTo("北京今天晴，26℃");
+        assertThat(events.get(3).getContent()).isEqualTo("北京今天晴，26℃");
+    }
+
+    @Test
+    void streamingTruncatedContentEmitsErrorInsteadOfCompleting() {
+        ModelResponse truncatedChunk = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .finishReason("length")
+                        .delta(Delta.builder().role("assistant").content("未完成的回答").build())
+                        .build()))
+                .build();
+        FakeLlmClient client = new FakeLlmClient().enqueueStreaming(Flux.just(truncatedChunk));
+        AgentContext ctx = context("你好");
+        ctx.setStreaming(true);
+
+        List<AgentResponse> events = run(executor(client), ctx);
+
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(
+                        AgentResponse.Type.CONTENT_DELTA,
+                        AgentResponse.Type.CONTENT,
+                        AgentResponse.Type.ERROR);
+        assertThat(events.getLast().getContent()).contains("truncated");
+    }
+
+    @Test
+    void streamingIntermediateContentUsesTheSameContentEvents() {
+        FakeLlmClient client = new FakeLlmClient();
+        ModelResponse contentChunk = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .delta(Delta.builder().role("assistant").content("我先查一下").build())
+                        .build()))
+                .build();
+        ModelResponse toolChunk = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .finishReason("tool_calls")
+                        .delta(Delta.builder()
+                                .toolCalls(List.of(ToolCall.builder()
+                                        .id("call-1")
+                                        .index(0)
+                                        .function(ToolCallFunction.builder()
+                                                .name("query_weather")
+                                                .arguments("{\"city\":\"北京\"}")
+                                                .build())
+                                        .build()))
+                                .build())
+                        .build()))
+                .build();
+        ModelResponse answerChunk = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .finishReason("stop")
+                        .delta(Delta.builder().role("assistant").content("北京晴").build())
+                        .build()))
+                .build();
+        client.enqueueStreaming(Flux.just(contentChunk, toolChunk))
+                .enqueueStreaming(Flux.just(answerChunk));
+
+        AgentContext ctx = context("北京天气怎么样？");
+        ctx.setStreaming(true);
+        List<AgentResponse> events = run(executor(client), ctx);
+
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(
+                        AgentResponse.Type.CONTENT_DELTA,
+                        AgentResponse.Type.CONTENT,
+                        AgentResponse.Type.TOOL_CALL,
+                        AgentResponse.Type.TOOL_RESULT,
+                        AgentResponse.Type.CONTENT_DELTA,
+                        AgentResponse.Type.CONTENT,
+                        AgentResponse.Type.COMPLETED);
+        assertThat(events.get(0).getContent()).isEqualTo("我先查一下");
+        assertThat(events.get(1).getContent()).isEqualTo("我先查一下");
+        assertThat(events.getLast().getContent()).isEqualTo("北京晴");
     }
 
     @Test
@@ -399,7 +631,7 @@ class ReActAgentExecutorTest {
                                 .build())
                         .build()))
                 .build();
-        FakeLlmClient client = new FakeLlmClient(thinkingResponse, finalAnswerResponse("北京晴"));
+        FakeLlmClient client = new FakeLlmClient(thinkingResponse, directAnswerResponse("北京晴"));
 
         List<AgentResponse> events = run(executor(client), context("北京天气怎么样？"));
 
@@ -490,7 +722,7 @@ class ReActAgentExecutorTest {
 
     @Test
     void stopRequestedBeforeExecuteSkipsLlmAndEmitsStopped() {
-        FakeLlmClient client = new FakeLlmClient(finalAnswerResponse("不应到达"));
+        FakeLlmClient client = new FakeLlmClient(directAnswerResponse("不应到达"));
         AgentContext ctx = context("测试");
         ctx.requestStop();
 
@@ -523,7 +755,7 @@ class ReActAgentExecutorTest {
                                 .build())
                         .build()))
                 .build();
-        FakeLlmClient client = new FakeLlmClient(twoCalls, finalAnswerResponse("不应到达"));
+        FakeLlmClient client = new FakeLlmClient(twoCalls, directAnswerResponse("不应到达"));
         AgentContext ctx = context("测试");
 
         List<AgentResponse> events = run(executorWithTools(client, "stopper", "spy_weather"), ctx);

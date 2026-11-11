@@ -118,12 +118,13 @@ agent.execute(AgentContext.builder()
         .blockLast();
 ```
 
-执行过程中，智能体会以事件流的形式输出每一步的进展：模型的思考（`THINKING`）、发起的工具调用（`TOOL_CALL`）、工具返回的结果（`TOOL_RESULT`），直到最终通过内置的 `final_answer` 工具提交答案（`FINAL_ANSWER`）。典型的输出类似这样。
+执行过程中，智能体会以事件流的形式输出每一步的进展：模型的思考（`THINKING`）、正文（`CONTENT`）、发起的工具调用（`TOOL_CALL`）和工具结果（`TOOL_RESULT`）。默认情况下，模型不再调用工具时循环自然结束，最后的 `COMPLETED` 事件携带最终答案。典型的输出类似这样。
 
 ```
 [TOOL_CALL] query_weather {"city":"北京"}
 [TOOL_RESULT] 晴，气温 26℃，微风
-[FINAL_ANSWER] 北京今天晴，气温 26℃，微风，适合外出。
+[CONTENT] 北京今天晴，气温 26℃，微风，适合外出。
+[COMPLETED] 北京今天晴，气温 26℃，微风，适合外出。
 ```
 
 到这里，我们已经走通了框架最核心的两条路径。后续章节会分别深入客户端、消息模型、拦截器、异常体系、工具、智能体等主题的细节。

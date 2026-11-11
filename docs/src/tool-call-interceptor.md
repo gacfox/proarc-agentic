@@ -45,8 +45,8 @@ ReActAgentExecutor agent = ReActAgentExecutor.builder()
 
 有几点语义值得注意。
 
-- 内置的 `final_answer` 工具同样经过拦截器链。拦截器可以审查甚至改写最终答案（链尾返回的字符串即最终答案），不需要处理时按 `toolName` 过滤即可。
-- 只有「真正会执行」的调用才过链：被跳过的（final_answer 之后的剩余调用）、因停止请求被取消的、参数不是合法 JSON 的调用不会触发拦截器。
+- 在 `ConvergenceMode.FINAL_ANSWER` 模式下，内置的 `final_answer` 工具同样经过拦截器链。拦截器可以审查甚至改写最终答案（链尾返回的字符串即最终答案），不需要处理时按 `toolName` 过滤即可；默认的 `NO_TOOL_CALL` 模式不会注入该工具。
+- 只有「真正会执行」的调用才过链：被跳过的（`final_answer` 之后的剩余调用）、因停止请求被取消的、参数不是合法 JSON 的调用不会触发拦截器。
 - 空参数会先规范化为 `{}` 再过链。
 
 ## 示例：同步审批

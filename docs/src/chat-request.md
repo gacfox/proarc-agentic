@@ -87,4 +87,4 @@ ChatRequest request = ChatRequest.builder()
 
 ## 请求级工具描述
 
-`tools` 字段允许我们在单次请求中直接传入工具描述，工具对象 `Tool` 对应 OpenAI 规范的 function 定义。在智能体场景下我们不需要关心这个字段，`ReActAgentExecutor` 会从 `ToolRegistry` 自动构建工具列表并固定使用 `"auto"` 的选择策略；而 `StructuredExecutor` 会强制指定调用结构化输出工具。手动传入 `tools` 主要适用于不使用智能体编排、只想做一次工具调用的场景。
+`tools` 字段允许我们在单次请求中直接传入工具描述，工具对象 `Tool` 对应 OpenAI 规范的 function 定义。在智能体场景下我们不需要关心这个字段，`ReActAgentExecutor` 会从 `ToolRegistry` 自动构建工具列表，并在工具列表非空时使用 `"auto"` 的选择策略；没有可用工具时会省略 `tools` 和 `tool_choice`。`StructuredExecutor` 则会强制指定调用结构化输出工具。手动传入 `tools` 主要适用于不使用智能体编排、只想做一次工具调用的场景。

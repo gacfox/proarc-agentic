@@ -79,7 +79,7 @@ public class AgentContext implements Serializable {
      */
     private Integer maxTokens;
     /**
-     * 是否流式输出思考与最终回答内容（产生THINKING_DELTA/FINAL_ANSWER_DELTA事件），默认false一次性输出
+     * 是否流式输出思考与模型正文（产生THINKING_DELTA/CONTENT_DELTA事件），默认false一次性输出
      */
     @Builder.Default
     private boolean streaming = false;

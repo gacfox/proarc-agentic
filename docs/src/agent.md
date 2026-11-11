@@ -4,16 +4,12 @@ ReAct（Reasoning + Acting）是目前构建智能体的经典范式：模型在
 
 ```mermaid
 flowchart TD
-    A["携带消息历史与工具列表调用 LLM"] --> B{"模型返回<br>tool_calls？"}
-    B -- "否" --> C["修复残留 tool_calls<br>追加提示消息"] --> A
-    B -- "是" --> D{"逐个处理工具调用"}
-    D --> E{"是否 final_answer？"}
-    E -- "是" --> F["提取最终答案<br>发出 FINAL_ANSWER 事件"]
-    F --> G["结束循环"]
-    E -- "否" --> H["执行工具<br>发出 TOOL_CALL / TOOL_RESULT 事件"]
-    H --> I["结果追加到消息历史"]
-    I --> D
-    D -- "本轮调用处理完毕且未结束" --> A
+    A["携带消息历史与工具列表调用 LLM"] --> B["输出 CONTENT / CONTENT_DELTA"]
+    B --> C{"模型返回<br>tool_calls？"}
+    C -- "否" --> D["发出 COMPLETED 事件<br>content 为最终答案"]
+    C -- "是" --> E["逐个执行工具<br>发出 TOOL_CALL / TOOL_RESULT 事件"]
+    E --> F["结果追加到消息历史"]
+    F --> A
 ```
 
 ## 基本用法
@@ -40,6 +36,7 @@ Flux<AgentResponse> events = agent.execute(AgentContext.builder()
 - `toolRegistry`：工具注册中心，注入 Starter 自动装配的 Bean 即可
 - `defaultToolNames`：默认启用的工具名列表，`AgentContext` 中未指定工具时使用
 - `maxIterations`：最大循环轮数，默认 50，超限后以 `ERROR` 事件结束，防止模型陷入死循环
+- `convergenceMode`：循环收敛方式，默认 `ConvergenceMode.NO_TOOL_CALL`，即模型不再调用工具时直接结束；也可设为 `FINAL_ANSWER` 强制使用内置工具提交答案
 
 `execute` 返回 `Flux<AgentResponse>` 事件流。执行过程在 `boundedElastic` 调度器上异步进行。
 
@@ -56,7 +53,7 @@ Flux<AgentResponse> events = agent.execute(AgentContext.builder()
 | `temperature` / `topP` / `topK` / `presencePenalty` / `frequencyPenalty` / `seed` / `maxTokens` | 采样参数，语义与 `ChatRequest` 一致 |
 | `enableThinking` | 是否开启思考，前提是模型声明了 `reasoning` 能力 |
 | `reasoningEffort` | 推理强度，语义与 `ChatRequest` 一致，默认不传递该字段 |
-| `streaming` | 是否流式输出思考与最终回答内容，默认 `false` |
+| `streaming` | 是否流式输出思考与模型正文，默认 `false` |
 | `variables` | 自定义变量 Map，供工具读写共享状态 |
 
 `messages` 是可变的：执行器每轮会把模型的助手消息和工具执行结果追加进去。执行结束后，我们可以通过 `context.getMessages()` 拿到完整的对话历史，用于持久化或下一次续聊。
@@ -81,30 +78,49 @@ public String queryOrder(OrderQuery query, AgentContext ctx) {
 | 事件类型 | 说明 | 产生的时机 |
 |---|---|---|
 | `THINKING` | 思考内容（reasoning） | 每轮模型返回了思考内容时（完整内容） |
+| `CONTENT` | 模型正文（content） | 每轮模型返回了正文时，不区分中间步骤与最终答案 |
 | `TOOL_CALL` | 发起工具调用 | 模型决定调用工具时，携带 toolCallId、toolName、toolArguments |
 | `TOOL_RESULT` | 工具执行结果 | 工具执行完成后，携带 toolCallId、toolName、结果文本 |
-| `FINAL_ANSWER` | 最终回答 | 模型调用内置 `final_answer` 工具时，执行随之结束 |
+| `COMPLETED` | 正常执行完成 | Agent Loop 正常结束，`content` 为最终答案 |
 | `ERROR` | 执行出错 | 循环内抛出异常或达到最大轮数时 |
 | `THINKING_DELTA` | 思考内容增量片段 | 仅 `streaming=true` 时，随流式分片实时产生 |
-| `FINAL_ANSWER_DELTA` | 最终回答增量片段 | 仅 `streaming=true` 时，随流式分片实时产生 |
+| `CONTENT_DELTA` | 模型正文增量片段 | 仅 `streaming=true` 时，随流式分片实时产生，不区分中间步骤与最终答案 |
 | `STOPPED` | 执行被停止 | `requestStop()` 请求停止生效时，发出后事件流正常完成 |
 | `SUSPENDED` | 执行被挂起 | 工具调用拦截器或工具抛出 `AgentSuspendException` 时，发出后事件流正常完成，可持久化上下文后再次 `execute` 恢复 |
 
-前端对接时，一般按事件类型分别渲染：思考内容放到折叠区域，工具调用展示为执行步骤，`FINAL_ANSWER`（或其 delta 流）渲染为正式回答。
+前端对接时，一般按事件类型分别渲染：思考内容放到折叠区域，工具调用展示为执行步骤，所有 `CONTENT` / `CONTENT_DELTA` 都作为模型正文处理。`COMPLETED` 是正常结束的明确信号，只关心最终结果的调用方可以直接读取它的 `content`，不需要自行判断哪一轮正文是最终答案。
 
 ## 流式模式
 
-`AgentContext.streaming` 默认为 `false`，此时每轮的思考和最终回答在模型完整返回后一次性以 `THINKING` / `FINAL_ANSWER` 事件发出。设置为 `true` 后，执行器改用流式调用，并实时发出两种增量事件：`THINKING_DELTA` 对应模型的思考分片，`FINAL_ANSWER_DELTA` 对应最终回答的内容分片。
+`AgentContext.streaming` 默认为 `false`，此时每轮的思考和正文在模型完整返回后一次性以 `THINKING` / `CONTENT` 事件发出。设置为 `true` 后，执行器改用流式调用，并实时发出 `THINKING_DELTA` 和 `CONTENT_DELTA` 两种增量事件。
 
-这里有一个实现细节值得了解：最终回答是通过内置的 `final_answer` 工具提交的，它的内容位于工具调用参数的 JSON 中（`{"message": "..."}`），流式传输时 JSON 是分片到达的。执行器内置了一个增量 JSON 解析器，从拼接到一半、甚至转义序列被截断的 JSON 参数中实时解码出 `message` 字段的文本，因此我们收到的 `FINAL_ANSWER_DELTA` 是纯文本内容，不含 JSON 语法噪音。
+正文事件不区分中间步骤和最终答案，因此执行器无需等到本轮结束后才能判断 Delta 类型，所有 `content` 分片都可以立即输出。即使模型先输出一段正文、随后发起工具调用，这段正文也不会被错误标记成最终答案。
 
-无论是否开启流式，每轮结束时完整的 `THINKING`、`TOOL_CALL`、`TOOL_RESULT`、`FINAL_ANSWER` 事件依然会照常发出，订阅方可以同时消费两类事件：delta 用于打字机渲染，完整事件用于存档。
+无论是否开启流式，每轮结束时完整的 `THINKING`、`CONTENT`、`TOOL_CALL`、`TOOL_RESULT` 事件依然会照常发出。Delta 用于打字机渲染，完整事件用于非流式消费或存档；渲染方不应把同一轮的 `CONTENT_DELTA` 和 `CONTENT` 重复拼接。正常结束时最后再发出 `COMPLETED`，其 `content` 是最终答案。
 
-## 循环的收口：final_answer
+## 循环收敛
 
-ReAct 循环最大的工程问题是如何让模型明确地结束循环。框架的做法是内置一个 `final_answer` 工具，它与业务工具一起提供给模型，模型调用它即表示提交最终答案并结束循环。`final_answer` 在工具列表中固定存在，我们不需要也无法注册同名工具。
+执行器通过 `convergenceMode` 支持两种收敛方式。
 
-相应地，如果模型在某一轮没有发起任何工具调用，执行器会向消息历史追加一条提示消息（告知模型必须调用 `final_answer` 结束或调用工具继续），然后进入下一轮，而不是直接把文本当作答案。这个设计强制了「答案必须从 final_answer 出来」的契约，让事件消费方的处理逻辑保持简单。
+### NO_TOOL_CALL（默认）
+
+默认使用现代模型常见的自然收敛方式，不向模型注入额外的结束工具。某一轮没有返回 `tool_calls`，且响应以 `stop` 正常结束、正文非空白时，该轮正文就是最终答案，执行器发出 `COMPLETED` 并结束循环；有工具调用时则执行工具并继续下一轮。中间步骤和最终步骤的模型正文统一通过 `CONTENT` / `CONTENT_DELTA` 返回。
+
+自然收敛不会把无效响应当作答案：无工具调用但正文为 null、空字符串或纯空白时发出 `ERROR`；`length`、`content_filter` 等异常结束原因同样发出 `ERROR`，不会用 `COMPLETED` 交付空答案或截断内容。
+
+### FINAL_ANSWER
+
+需要兼容较早的模型或强制答案提交协议时，可以显式启用内置 `final_answer` 工具：
+
+```java
+ReActAgentExecutor agent = ReActAgentExecutor.builder()
+        .defaultLlmClient(llmClient)
+        .toolRegistry(toolRegistry)
+        .convergenceMode(ConvergenceMode.FINAL_ANSWER)
+        .build();
+```
+
+该模式会把 `final_answer` 加入工具列表，模型调用它后，执行器提取 `message` 参数并通过 `COMPLETED.content` 返回最终答案。工具参数不作为模型正文，因此不会产生 `CONTENT_DELTA`。如果模型只返回正文而没有调用工具，执行器会追加提醒消息，要求它调用业务工具继续或调用 `final_answer` 结束。
 
 另外，执行器对异常场景做了兜底：如果模型返回中残留了未执行的 tool_calls（例如因 `length` 截断而结束），框架会自动补上对应的工具结果消息并注明未执行的原因，保证消息历史中每个 tool_call 都有配对的结果——否则下一轮请求会直接被端点拒绝；工具参数不是合法 JSON 时（典型的截断场景），不会真正执行工具，而是把错误信息作为工具结果反馈给模型。
 
