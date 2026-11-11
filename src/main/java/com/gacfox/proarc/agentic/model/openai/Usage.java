@@ -1,5 +1,6 @@
 package com.gacfox.proarc.agentic.model.openai;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
@@ -41,6 +42,7 @@ public class Usage implements Serializable {
      *
      * @return 缓存tokens数，provider未上报时返回null
      */
+    @JsonIgnore
     public Integer getCachedTokens() {
         return promptTokensDetails != null ? promptTokensDetails.getCachedTokens() : null;
     }
