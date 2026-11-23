@@ -293,15 +293,57 @@ class ReActAgentExecutorTest {
     @Test
     void emptyOrBlankContentWithoutToolCallsEmitsError() {
         for (String content : new String[]{null, "", "  \n"}) {
-            FakeLlmClient client = new FakeLlmClient(directAnswerResponse(content));
+            FakeLlmClient client = new FakeLlmClient(
+                    directAnswerResponse(content), directAnswerResponse(content), directAnswerResponse(content));
 
             List<AgentResponse> events = run(executor(client), context("你好"));
 
             assertThat(events).extracting(AgentResponse::getType).endsWith(AgentResponse.Type.ERROR);
             assertThat(events).noneMatch(event -> event.getType() == AgentResponse.Type.COMPLETED);
             assertThat(events.getLast().getContent()).contains("empty content");
-            assertThat(client.receivedRequests).hasSize(1);
+            assertThat(client.receivedRequests).hasSize(3);
         }
+    }
+
+    @Test
+    void emptyOrBlankContentWithoutToolCallsRecoversWithReminder() {
+        for (String content : new String[]{null, "", "  \n"}) {
+            FakeLlmClient client = new FakeLlmClient(
+                    directAnswerResponse(content), directAnswerResponse("最终答案"));
+            AgentContext ctx = context("你好");
+
+            List<AgentResponse> events = run(executor(client), ctx);
+
+            assertThat(events).noneMatch(event -> event.getType() == AgentResponse.Type.ERROR);
+            assertThat(events.getLast().getType()).isEqualTo(AgentResponse.Type.COMPLETED);
+            assertThat(events.getLast().getContent()).isEqualTo("最终答案");
+            assertThat(client.receivedRequests).hasSize(2);
+            // 空assistant消息被移除，取而代之的是注入的提醒消息
+            List<Message> messages = ctx.getMessages();
+            assertThat(messages).hasSize(3);
+            assertThat(messages.get(1).getRole()).isEqualTo(Message.ROLE_USER);
+            assertThat(messages.get(1).getContent().toString()).contains("Your previous response was empty");
+            assertThat(messages.get(2).getRole()).isEqualTo(Message.ROLE_ASSISTANT);
+            assertThat(messages.get(2).getContent()).isEqualTo("最终答案");
+        }
+    }
+
+    @Test
+    void emptyResponseRecoveryCounterResetsAfterValidResponse() {
+        FakeLlmClient client = new FakeLlmClient(
+                directAnswerResponse(""),
+                toolCallResponse("call-1", "query_weather", "{\"city\":\"北京\"}"),
+                directAnswerResponse(""),
+                toolCallResponse("call-2", "query_weather", "{\"city\":\"上海\"}"),
+                directAnswerResponse(""),
+                directAnswerResponse("最终答案"));
+
+        List<AgentResponse> events = run(executor(client), context("你好"));
+
+        assertThat(events).noneMatch(event -> event.getType() == AgentResponse.Type.ERROR);
+        assertThat(events.getLast().getType()).isEqualTo(AgentResponse.Type.COMPLETED);
+        assertThat(events.getLast().getContent()).isEqualTo("最终答案");
+        assertThat(client.receivedRequests).hasSize(6);
     }
 
     @Test
@@ -524,6 +566,39 @@ class ReActAgentExecutorTest {
         assertThat(events.get(1).getContent()).isEqualTo("，26℃");
         assertThat(events.get(2).getContent()).isEqualTo("北京今天晴，26℃");
         assertThat(events.get(3).getContent()).isEqualTo("北京今天晴，26℃");
+    }
+
+    @Test
+    void streamingEmptyContentRecoversWithReminder() {
+        ModelResponse emptyChunk = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .finishReason("stop")
+                        .delta(Delta.builder().role("assistant").build())
+                        .build()))
+                .build();
+        ModelResponse answerChunk = ModelResponse.builder()
+                .choices(List.of(Choice.builder()
+                        .index(0)
+                        .finishReason("stop")
+                        .delta(Delta.builder().role("assistant").content("北京晴").build())
+                        .build()))
+                .build();
+        FakeLlmClient client = new FakeLlmClient()
+                .enqueueStreaming(Flux.just(emptyChunk))
+                .enqueueStreaming(Flux.just(answerChunk));
+        AgentContext ctx = context("你好");
+        ctx.setStreaming(true);
+
+        List<AgentResponse> events = run(executor(client), ctx);
+
+        assertThat(events).extracting(AgentResponse::getType)
+                .containsExactly(
+                        AgentResponse.Type.CONTENT_DELTA,
+                        AgentResponse.Type.CONTENT,
+                        AgentResponse.Type.COMPLETED);
+        assertThat(events.getLast().getContent()).isEqualTo("北京晴");
+        assertThat(client.receivedRequests).hasSize(2);
     }
 
     @Test

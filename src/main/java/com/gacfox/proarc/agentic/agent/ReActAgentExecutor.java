@@ -21,6 +21,7 @@ import reactor.core.scheduler.Schedulers;
 import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * ReAct智能体执行器
@@ -29,6 +30,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Builder
 public class ReActAgentExecutor {
     private static final String FINAL_ANSWER_TOOL = "final_answer";
+    /**
+     * 连续空响应（stop正常结束、无工具调用、正文空白）的最大自愈次数：
+     * 每次移除空助手消息并注入提醒让模型继续，超过此次数仍为空则判定执行失败
+     */
+    private static final int MAX_CONSECUTIVE_EMPTY_RESPONSES = 2;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final LlmClient defaultLlmClient;
@@ -69,6 +75,7 @@ public class ReActAgentExecutor {
                 .stream()
                 .sorted(Comparator.comparingInt(ToolCallInterceptor::getOrder))
                 .toList();
+        AtomicInteger consecutiveEmptyResponses = new AtomicInteger();
 
         for (int i = 0; i < this.maxIterations; i++) {
             if (cancelled.get() || context.isStopRequested()) {
@@ -85,7 +92,7 @@ public class ReActAgentExecutor {
                         AgentInterceptor interceptor = sortedInterceptors.get(index++);
                         return interceptor.intercept(context, this);
                     }
-                    return executeLoop(context, sink, cancelled, sortedToolCallInterceptors);
+                    return executeLoop(context, sink, cancelled, sortedToolCallInterceptors, consecutiveEmptyResponses);
                 }
             };
 
@@ -99,7 +106,8 @@ public class ReActAgentExecutor {
     }
 
     private AgentLoopResult executeLoop(AgentContext context, Sinks.Many<AgentResponse> sink,
-                                        AtomicBoolean cancelled, List<ToolCallInterceptor> sortedToolCallInterceptors) {
+                                        AtomicBoolean cancelled, List<ToolCallInterceptor> sortedToolCallInterceptors,
+                                        AtomicInteger consecutiveEmptyResponses) {
         LlmClient llmClient = context.getLlmClient() != null ? context.getLlmClient() : defaultLlmClient;
         List<String> toolNames = context.getToolNames() != null && !context.getToolNames().isEmpty()
                 ? context.getToolNames() : defaultToolNames;
@@ -171,6 +179,9 @@ public class ReActAgentExecutor {
 
         String finishReason = response.extractBlockingFinishReason();
         List<ToolCall> toolCalls = response.extractBlockingToolCalls();
+        if (!toolCalls.isEmpty() || StringUtils.hasText(content)) {
+            consecutiveEmptyResponses.set(0);
+        }
         if (toolCalls.isEmpty() && !isFinalAnswerMode()) {
             if ("length".equals(finishReason)) {
                 throw new IllegalStateException("LLM response was truncated before producing a complete answer");
@@ -180,7 +191,7 @@ public class ReActAgentExecutor {
                         "LLM response ended abnormally without tool calls: finish_reason='" + finishReason + "'");
             }
             if (!StringUtils.hasText(content)) {
-                throw new IllegalStateException("LLM returned empty content without tool calls");
+                return recoverEmptyResponse(context, responses, consecutiveEmptyResponses);
             }
             emit(sink, responses, AgentResponse.completed(content));
             return AgentLoopResult.finishWith(responses);
@@ -212,6 +223,32 @@ public class ReActAgentExecutor {
         return finalMessage != null
                 ? AgentLoopResult.finishWith(responses)
                 : AgentLoopResult.continueWith(responses);
+    }
+
+    /**
+     * 模型偶发异常的自愈：stop正常结束但既无工具调用又正文空白。
+     * 移除空助手消息（部分端点会拒绝空content的assistant消息）并注入提醒让模型继续，
+     * 连续超过{@link #MAX_CONSECUTIVE_EMPTY_RESPONSES}次仍为空则判定执行失败
+     */
+    private AgentLoopResult recoverEmptyResponse(AgentContext context, List<AgentResponse> responses,
+                                                 AtomicInteger consecutiveEmptyResponses) {
+        int emptyCount = consecutiveEmptyResponses.incrementAndGet();
+        context.getMessages().removeLast();
+        if (emptyCount > MAX_CONSECUTIVE_EMPTY_RESPONSES) {
+            throw new IllegalStateException("LLM returned empty content without tool calls after "
+                    + MAX_CONSECUTIVE_EMPTY_RESPONSES + " recovery attempts");
+        }
+        log.warn("LLM returned empty content without tool calls (consecutive={}), injecting reminder, contextId={}",
+                emptyCount, context.getContextId());
+        context.getMessages().add(Message.builder()
+                .role(Message.ROLE_USER)
+                .content("""
+                        Your previous response was empty.
+                        Continue the task: call the required tool immediately, or provide the final answer as plain text.
+                        Do not return an empty response.
+                        """)
+                .build());
+        return AgentLoopResult.continueWith(responses);
     }
 
     /**

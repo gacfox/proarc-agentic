@@ -106,7 +106,7 @@ public String queryOrder(OrderQuery query, AgentContext ctx) {
 
 默认使用现代模型常见的自然收敛方式，不向模型注入额外的结束工具。某一轮没有返回 `tool_calls`，且响应以 `stop` 正常结束、正文非空白时，该轮正文就是最终答案，执行器发出 `COMPLETED` 并结束循环；有工具调用时则执行工具并继续下一轮。中间步骤和最终步骤的模型正文统一通过 `CONTENT` / `CONTENT_DELTA` 返回。
 
-自然收敛不会把无效响应当作答案：无工具调用但正文为 null、空字符串或纯空白时发出 `ERROR`；`length`、`content_filter` 等异常结束原因同样发出 `ERROR`，不会用 `COMPLETED` 交付空答案或截断内容。
+自然收敛不会把无效响应当作答案：无工具调用但正文为 null、空字符串或纯空白时（`stop` 正常结束但内容为空，属于模型偶发异常），执行器会移除该条空助手消息并追加提醒消息，要求模型调用工具继续或直接输出最终答案，然后进入下一轮；连续空响应最多自愈 2 次，第 3 次仍为空才发出 `ERROR`，避免持续空输出时空耗调用。被移除的空助手消息不会留在消息历史中（部分端点会拒绝空 content 的 assistant 消息），注入的提醒消息则正常进入历史。`length`、`content_filter` 等异常结束原因仍直接发出 `ERROR`，不会用 `COMPLETED` 交付空答案或截断内容。
 
 ### FINAL_ANSWER
 
